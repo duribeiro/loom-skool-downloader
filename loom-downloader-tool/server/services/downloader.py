@@ -37,24 +37,33 @@ def processar_download(url_master, pasta_temp, callback_progresso=None):
     melhor_video = sorted(videos, key=lambda x: int(x[0]), reverse=True)[0][1]
     arquivo_audio = audio_match.group(1)
 
-    filas = [] 
+    filas = []
+    playlists = {}
     
-    def prep(m3u8):
+    def prep(m3u8, chave):
         u = f"{base}{m3u8}?{assinatura}"
         try:
             c = requests.get(u, headers=HEADERS).text
+            playlist_nome = os.path.basename(m3u8.split('?', 1)[0])
             for l in c.splitlines():
                 l = l.strip()
                 if ".ts" in l:
                     nome_ts = re.search(r'(.+?\.ts)', l).group(1).strip()
                     url_ts = f"{base}{l}" if "Signature=" in l else f"{base}{l}?{assinatura}"
                     filas.append((url_ts, os.path.join(pasta_temp, os.path.basename(nome_ts)), callback_progresso))
+            playlists[chave] = (playlist_nome, c)
         except: pass
     
-    prep(melhor_video)
-    prep(arquivo_audio)
+    prep(melhor_video, "video")
+    prep(arquivo_audio, "audio")
     
     with open(os.path.join(pasta_temp, "master.m3u8"), "w") as f: f.write(master)
+    if "video" in playlists:
+        nome, conteudo = playlists["video"]
+        with open(os.path.join(pasta_temp, nome), "w") as f: f.write(conteudo)
+    if "audio" in playlists:
+        nome, conteudo = playlists["audio"]
+        with open(os.path.join(pasta_temp, nome), "w") as f: f.write(conteudo)
 
     if callback_progresso: 
         callback_progresso(total=len(filas))
