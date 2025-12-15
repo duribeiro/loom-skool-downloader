@@ -84,31 +84,35 @@ function injetarBotao(iframe) {
         e.preventDefault();
         e.stopPropagation();
 
-        const dados = obterDadosDaPagina(); // Pega os nomes no momento do clique
+        const dados = obterDadosDaPagina();
         const urlEmbed = iframe.src;
 
-        btn.innerText = '⏳ ...';
-        btn.style.backgroundColor = '#f1c40f'; 
+        // Feedback Imediato de Clique
+        btn.innerText = '📡 Conectando...';
+        btn.style.backgroundColor = '#95a5a6'; // Cinza
 
-        // Envia para o Python
         fetch('http://localhost:5000/baixar', {
             method: 'POST',
             headers: {'Content-Type': 'application/json'},
             body: JSON.stringify({
                 url: urlEmbed,
-                folder: dados.folder,    // Vai criar a pasta com o nome do curso
-                filename: dados.filename // Vai criar o arquivo com o nome da aula
+                folder: dados.folder,
+                filename: dados.filename
             })
         })
         .then(r => r.json())
         .then(d => {
-            console.log(d);
-            btn.innerText = '✅ Baixando';
-            btn.style.backgroundColor = '#2ecc71';
-            setTimeout(() => btn.innerText = '⬇ Baixar Aula', 3000);
+            // Feedback de Sucesso (Entrou na Fila)
+            btn.innerText = '⏳ Na Fila';
+            btn.style.backgroundColor = '#3498db'; // Azul
+            
+            // Volta ao normal depois de 5 segundos para permitir baixar de novo se precisar
+            setTimeout(() => {
+                btn.innerText = '⬇ Baixar Aula';
+                btn.style.backgroundColor = '#00d084'; // Verde Original
+            }, 5000);
         })
         .catch(err => {
-            console.error(err);
             btn.innerText = '❌ Erro';
             btn.style.backgroundColor = '#e74c3c';
         });
