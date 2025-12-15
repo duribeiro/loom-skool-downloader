@@ -1,0 +1,14 @@
+{
+  "manifest_version": 3,
+  "name": "Botão Download Skool+Loom",
+  "version": "2.0",
+  "permissions": ["activeTab", "scripting"],
+  "host_permissions": ["*://*.loom.com/*", "*://*.skool.com/*"],
+  "content_scripts": [
+    {
+      "matches": ["*://*.skool.com/*", "*://*.loom.com/*"],
+      "js": ["content.js"],
+      "css": ["style.css"]
+    }
+  ]
+}

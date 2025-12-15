@@ -1,0 +1,19 @@
+# Python
+__pycache__/
+*.py[cod]
+venv/
+.env
+
+# Pastas do nosso projeto (não queremos subir os vídeos baixados)
+hls-temp/
+output/
+hls-content/
+
+# Logs e Sistemas
+*.log
+.DS_Store
+# Ignorar pasta de lixo/backup
+trash/
+
+# Ignorar arquivos de configuração do VS Code (opcional, mas recomendado)
+.vscode/

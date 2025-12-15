@@ -1,0 +1,24 @@
+.meu-botao-download {
+    position: fixed; /* Fixado na janela do iframe */
+    top: 15px;
+    right: 60px; /* Um pouco para a esquerda para não cobrir botões do player */
+    z-index: 2147483647; /* Valor máximo para ficar acima de tudo */
+    background-color: #00d084;
+    color: white;
+    border: none;
+    padding: 8px 15px;
+    font-size: 13px;
+    font-weight: bold;
+    border-radius: 4px;
+    cursor: pointer;
+    box-shadow: 0 2px 5px rgba(0,0,0,0.5);
+    font-family: sans-serif;
+    opacity: 0.9;
+    transition: all 0.2s ease;
+}
+
+.meu-botao-download:hover {
+    opacity: 1;
+    transform: scale(1.05);
+    background-color: #00b070;
+}
