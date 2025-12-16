@@ -2,7 +2,7 @@ import os
 from flask import Blueprint, request, jsonify
 from concurrent.futures import ThreadPoolExecutor
 
-# Importa a "Base de Dados" visual do dashboard
+# Importa a "Base de Dados" visual (lista global) do dashboard
 from dashboard import DASHBOARD_DATA
 
 # Importa nossos serviços via __init__.py
@@ -15,81 +15,110 @@ from services import (
     PASTA_TEMP_RAIZ
 )
 
-# Cria o Blueprint (um pedaço da aplicação)
+# Cria o Blueprint (um módulo da aplicação Flask)
 download_bp = Blueprint('download', __name__)
 
-# Configura o Executor de Threads aqui (3 downloads simultâneos)
+# Configura o Executor de Threads
+# max_workers=3 significa que baixamos no máximo 3 aulas SIMULTANEAMENTE.
+# O resto fica na fila esperando uma vaga.
 executor = ThreadPoolExecutor(max_workers=3)
 
-# --- LÓGICA DO TRABALHADOR (WORKER) ---
-def worker(url, pasta_destino, nome_arq, item_data):
-    # 1. Atualiza Status Visual
-    item_data['status'] = 'baixando'
+# --- 1. A LÓGICA DO TRABALHADOR (WORKER) ---
+# Esta função roda em "segundo plano" (background) para não travar o servidor.
+def worker_download(url, pasta_destino, nome_arquivo_sugerido, item_dashboard):
+    """
+    Executa o ciclo completo de vida de um download:
+    Preparar -> Baixar -> Converter -> Limpar
+    """
     
-    # 2. Resolver Nome do Arquivo
-    if not nome_arq:
-        t, _ = extrair_metadados(url)
-        nome_arq = t
+    # Atualiza o status visual para "Baixando"
+    item_dashboard['status'] = 'baixando'
     
-    nome_limpo = limpar_nome_arquivo(nome_arq)
-    item_data['nome'] = nome_limpo # Atualiza o nome no painel
+    # A. Resolver o Nome do Arquivo
+    # Se a extensão não mandou nome, tentamos pegar do título da página (fallback)
+    if not nome_arquivo_sugerido:
+        titulo_extraido, _ = extrair_metadados(url)
+        nome_arquivo_sugerido = titulo_extraido
     
-    # Define caminhos
-    pasta_temp = os.path.join(PASTA_TEMP_RAIZ, nome_limpo)
+    # Limpa caracteres proibidos (ex: remove "?", "/", ":")
+    nome_limpo = limpar_nome_arquivo(nome_arquivo_sugerido)
+    item_dashboard['nome'] = nome_limpo # Atualiza o nome bonitinho no painel
     
-    # 3. Callback para atualizar a barra de progresso
-    def callback_progresso(total=None):
+    # Define onde ficarão os arquivos temporários (.ts)
+    caminho_pasta_temp = os.path.join(PASTA_TEMP_RAIZ, nome_limpo)
+    
+    # B. Função de Callback
+    # O downloader chama isso a cada pedacinho baixado para atualizar a barra
+    def atualizar_progresso(total=None):
         if total: 
-            item_data['total'] = total
+            item_dashboard['total'] = total
         else: 
-            item_data['progresso'] += 1
+            item_dashboard['progresso'] += 1
     
-    # 4. Processo de Download
-    _, m3u8 = extrair_metadados(url)
-    sucesso = False
+    # C. Iniciar Processo
+    # Extraímos a URL real do vídeo (m3u8) da página do Loom
+    _, url_m3u8 = extrair_metadados(url)
+    sucesso_operacao = False
     
-    if m3u8:
-        # Tenta baixar
-        if processar_download(m3u8, pasta_temp, callback_progresso):
-            item_data['status'] = 'convertendo'
-            # Tenta converter
-            if converter_final(nome_limpo, pasta_destino, pasta_temp):
-                limpar_pasta(pasta_temp) # Limpa se der certo
-                sucesso = True
-    
-    # 5. Finalização
-    if sucesso:
-        item_data['status'] = 'sucesso'
-        item_data['progresso'] = item_data['total'] # Garante barra cheia
-    else:
-        item_data['status'] = 'erro'
-        limpar_pasta(pasta_temp) # Limpa para não deixar lixo corrompido
+    if url_m3u8:
+        # Tenta baixar (ou verifica se já existe)
+        # IMPORTANTE: Passamos 'nome_limpo' e 'pasta_destino' para a verificação inteligente
+        download_ok = processar_download(
+            url_m3u8, 
+            caminho_pasta_temp, 
+            nome_limpo,    
+            pasta_destino, 
+            atualizar_progresso
+        )
 
-# --- DEFINIÇÃO DA ROTA ---
-@download_bp.route('/baixar', methods=['POST'])
-def rota_baixar():
-    d = request.json
+        if download_ok:
+            item_dashboard['status'] = 'convertendo'
+            
+            # Tenta converter (juntar os .ts em .mp4) e mover para a pasta final
+            if converter_final(nome_limpo, pasta_destino, caminho_pasta_temp):
+                # Se tudo deu certo, apagamos a pasta temporária suja
+                limpar_pasta(caminho_pasta_temp) 
+                sucesso_operacao = True
     
-    # Cria o objeto que vai aparecer no Dashboard
-    novo_item = {
-        'nome': d.get('filename', 'Verificando...'),
-        'status': 'fila', 
+    # D. Finalização e Relatório
+    if sucesso_operacao:
+        item_dashboard['status'] = 'sucesso'
+        item_dashboard['progresso'] = item_dashboard['total'] # Garante barra 100%
+    else:
+        item_dashboard['status'] = 'erro'
+        # Em caso de erro, limpamos a temp para não deixar lixo corrompido ocupando espaço
+        limpar_pasta(caminho_pasta_temp)
+
+# --- 2. DEFINIÇÃO DA ROTA (O RECEPCIONISTA) ---
+@download_bp.route('/baixar', methods=['POST'])
+def rota_receber_pedido():
+    """
+    Recebe o JSON vindo da extensão do Chrome.
+    Exemplo de JSON: { "url": "...", "folder": "Curso/Modulo1", "filename": "Aula 1" }
+    """
+    dados_request = request.json
+    
+    # Cria o objeto de dados que vai aparecer no Dashboard (Terminal)
+    novo_item_dashboard = {
+        'nome': dados_request.get('filename', 'Verificando...'),
+        'status': 'fila',       # Começa na fila
         'progresso': 0, 
-        'total': 1,
-        'url': d.get('url'),
-        'folder': d.get('folder')
+        'total': 1,             # Valor provisório até começar
+        'url': dados_request.get('url'),
+        'folder': dados_request.get('folder')
     }
     
-    # Adiciona na lista global do Dashboard
-    DASHBOARD_DATA.append(novo_item)
+    # Adiciona na lista global (para o dashboard.py ler)
+    DASHBOARD_DATA.append(novo_item_dashboard)
     
-    # Manda para a fila de execução
+    # Envia para a fila de execução (Thread)
+    # O servidor responde "OK" imediatamente, sem esperar o download acabar.
     executor.submit(
-        worker, 
-        novo_item['url'], 
-        novo_item['folder'], 
-        novo_item['nome'], 
-        novo_item
+        worker_download, 
+        novo_item_dashboard['url'], 
+        novo_item_dashboard['folder'], 
+        novo_item_dashboard['nome'], 
+        novo_item_dashboard
     )
     
-    return jsonify({"status": "ok"})
+    return jsonify({"status": "ok", "mensagem": "Adicionado à fila"})

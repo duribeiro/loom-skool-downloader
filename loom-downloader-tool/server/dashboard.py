@@ -6,70 +6,107 @@ from rich.panel import Panel
 from rich.table import Table
 from rich import box
 
-# Dados Globais
+# --- BASE DE DADOS EM MEMÓRIA ---
+# Esta lista é partilhada entre o routes.py (que adiciona dados) 
+# e este arquivo (que lê dados para desenhar na tela).
 DASHBOARD_DATA = []
 
 def _gerar_tabela_ativos():
-    # Filtra downloads ativos e fila
+    """
+    Cria a tabela principal com os downloads que estão a acontecer agora.
+    Mostra: Nome do Arquivo | Barra de Progresso | Status (Baixando/Convertendo)
+    """
+    # Separa quem está trabalhando de quem está na fila
     ativos = [d for d in DASHBOARD_DATA if d['status'] in ['baixando', 'convertendo']]
     fila = [d for d in DASHBOARD_DATA if d['status'] == 'fila']
     
-    # Cria tabela principal
+    # Configuração da Tabela (Estilo Rich)
     table = Table(box=box.ROUNDED, expand=True, title="[bold green]🚀 LOOM HUB v2.5[/]")
     table.add_column("Arquivo / Aula", style="cyan", ratio=3)
     table.add_column("Progresso", style="magenta", ratio=2)
     table.add_column("Status", style="yellow", justify="right", ratio=1)
 
+    # Mensagem se não houver nada a acontecer
     if not ativos and not fila:
         table.add_row("[dim]Aguardando links...[/]", "", "[dim]Ocioso[/]")
 
-    # Linhas de Ativos
+    # 1. Renderiza os Downloads ATIVOS
     for item in ativos:
-        pct = 0
-        if item['total'] > 0: pct = int((item['progresso'] / item['total']) * 100)
+        # Cálculo da percentagem (proteção contra divisão por zero)
+        percentual = 0
+        if item['total'] > 0: 
+            percentual = int((item['progresso'] / item['total']) * 100)
         
-        largura = 20
-        cheio = int((pct / 100) * largura)
-        barra = "█" * cheio + "░" * (largura - cheio)
+        # Criação da barra visual (Ex: █ █ █ ░ ░)
+        largura_barra = 20
+        blocos_cheios = int((percentual / 100) * largura_barra)
+        barra_visual = "█" * blocos_cheios + "░" * (largura_barra - blocos_cheios)
         
-        sts = "Convertendo ⚙️" if item['status'] == 'convertendo' else "Baixando ⬇"
-        table.add_row(f"[bold]{item['nome']}[/]", f"[green]{barra}[/] {pct}%", sts)
+        # Define o ícone de status
+        texto_status = "Convertendo ⚙️" if item['status'] == 'convertendo' else "Baixando ⬇"
+        
+        table.add_row(
+            f"[bold]{item['nome']}[/]", 
+            f"[green]{barra_visual}[/] {percentual}%", 
+            texto_status
+        )
 
-    # Seção da Fila
+    # 2. Renderiza a FILA (se houver alguém esperando)
     if fila:
-        table.add_section()
+        table.add_section() # Linha divisória
         for item in fila:
-            table.add_row(f"[dim]{item['nome']}[/]", "[dim]Aguardando vaga...[/]", "⏳ Na Fila")
+            table.add_row(
+                f"[dim]{item['nome']}[/]", 
+                "[dim]Aguardando vaga...[/]", 
+                "⏳ Na Fila"
+            )
 
     return table
 
 def _gerar_painel_historico():
-    # Filtra os concluídos
+    """
+    Cria o painel inferior com o histórico dos últimos downloads concluídos.
+    """
     concluidos = [d for d in DASHBOARD_DATA if d['status'] == 'sucesso']
     
     if not concluidos:
-        return Panel("[dim]Nenhum download finalizado nesta sessão.[/]", title="📜 Histórico Recente", border_style="blue")
+        return Panel(
+            "[dim]Nenhum download finalizado nesta sessão.[/]", 
+            title="📜 Histórico Recente", 
+            border_style="blue"
+        )
     
-    # Pega os últimos 3 para não lotar a tela
-    texto_hist = ""
+    # Mostra apenas os últimos 3 para não encher a tela
+    texto_historico = ""
     for item in concluidos[-3:]:
-        texto_hist += f"✅ {item['nome']}\n"
+        texto_historico += f"✅ {item['nome']}\n"
     
-    return Panel(texto_hist.strip(), title="📜 Histórico Recente", border_style="green")
+    return Panel(
+        texto_historico.strip(), 
+        title="📜 Histórico Recente", 
+        border_style="green"
+    )
 
 def _loop_visual():
+    """
+    Função que roda em loop infinito atualizando a tela 4 vezes por segundo.
+    """
     with Live(refresh_per_second=4) as live:
         while True:
-            # Cria o layout dividido: Principal em cima, Histórico em baixo
+            # Layout dividido: Tabela em Cima, Histórico em Baixo
             layout = Layout()
             layout.split(
                 Layout(_gerar_tabela_ativos(), name="main"),
-                Layout(_gerar_painel_historico(), name="footer", size=5) # Tamanho fixo para o rodapé
+                Layout(_gerar_painel_historico(), name="footer", size=5)
             )
             
             live.update(layout)
             time.sleep(0.25)
 
 def iniciar_dashboard():
-    t = threading.Thread(target=_loop_visual, daemon=True)
-    t.start()
+    """
+    Inicia o dashboard numa Thread separada (Daemon).
+    Daemon significa que se o programa principal fechar, esta thread morre junto.
+    """
+    thread = threading.Thread(target=_loop_visual, daemon=True)
+    thread.start()

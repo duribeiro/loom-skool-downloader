@@ -1,113 +1,77 @@
 import os
 import subprocess
-import shutil # <--- Importante para mover o arquivo
+import shutil
 from .utils import limpar_nome_arquivo
 
-# --- CORREÇÃO DO CAMINHO ---
-dir_atual = os.path.dirname(os.path.abspath(__file__))
-dir_server = os.path.dirname(dir_atual)
-dir_raiz = os.path.dirname(dir_server)
-PASTA_OUTPUT = os.path.join(dir_raiz, "output")
+# --- 1. CONFIGURAÇÃO DE CAMINHOS ---
+# Calcula dinamicamente onde está a raiz do projeto para encontrar a pasta 'output'
+dir_atual = os.path.dirname(os.path.abspath(__file__)) # .../services
+dir_server = os.path.dirname(dir_atual)                # .../server
+dir_raiz = os.path.dirname(dir_server)                 # .../loom-downloader-tool
+PASTA_OUTPUT = os.path.join(dir_raiz, "output")        # .../loom-downloader-tool/output
 
-def converter_final(nome, pasta_rel, pasta_temp):
+def converter_final(nome_arquivo, pasta_relativa_destino, pasta_temp_trabalho):
+    """
+    Converte os arquivos .ts baixados para um único .mp4.
+    Estratégia: Gera o arquivo na pasta temporária (para evitar erros de caminho longo)
+    e depois move para a pasta final de destino.
+    """
     try:
-        # 1. Preparar Caminhos Finais
-        if pasta_rel.startswith(os.sep): pasta_rel = pasta_rel[1:]
+        # --- 2. PREPARAR DESTINO FINAL ---
+        # Remove a barra inicial se existir (ex: "\Curso" -> "Curso")
+        if pasta_relativa_destino.startswith(os.sep): 
+            pasta_relativa_destino = pasta_relativa_destino[1:]
         
-        dest_dir = os.path.join(PASTA_OUTPUT, pasta_rel)
-        os.makedirs(dest_dir, exist_ok=True) # O Python cria a pasta (Isso já funciona)
+        # Cria o caminho absoluto onde o arquivo final deve morar
+        caminho_pasta_final = os.path.join(PASTA_OUTPUT, pasta_relativa_destino)
+        os.makedirs(caminho_pasta_final, exist_ok=True) 
         
-        nome_final_mp4 = f"{limpar_nome_arquivo(nome)}.mp4"
-        caminho_final_absoluto = os.path.join(dest_dir, nome_final_mp4)
+        nome_mp4_final = f"{limpar_nome_arquivo(nome_arquivo)}.mp4"
+        caminho_final_absoluto = os.path.join(caminho_pasta_final, nome_mp4_final)
 
-        # 2. Caminho Temporário SIMPLES
-        # Em vez de mandar o FFmpeg salvar lá longe, salvamos aqui perto
-        nome_temp_simples = "temp_convertido.mp4"
-        caminho_mp4_temp = os.path.join(pasta_temp, nome_temp_simples)
-
-        print(f"\n⚙️  Estratégia de Conversão:")
-        print(f"   1. Gerar: {nome_temp_simples} (na pasta temp)")
-        print(f"   2. Mover para: {caminho_final_absoluto}")
-
-        # Verifica se já existe no destino
+        # Verificação de redundância (Double Check)
+        # O downloader já faz isso, mas é bom garantir antes de processar vídeo pesado
         if os.path.exists(caminho_final_absoluto) and os.path.getsize(caminho_final_absoluto) > 1_000_000:
-            print(f"⚠️  Arquivo já existe no destino. Pulando.")
+            print(f"⚠️  Arquivo já existe no destino. Conversão pulada: {nome_mp4_final}")
             return True
 
-        # 3. Executa FFmpeg (Salvando localmente com nome simples)
-        cmd = [
+        # --- 3. CAMINHO TEMPORÁRIO (O TRUQUE) ---
+        # Salvamos com um nome curto dentro da pasta temp para o FFmpeg não reclamar
+        nome_temp_curto = "temp_convertido.mp4"
+        caminho_mp4_temp = os.path.join(pasta_temp_trabalho, nome_temp_curto)
+
+        # --- 4. EXECUTAR FFMPEG ---
+        comando_ffmpeg = [
             "ffmpeg", 
-            "-y", 
-            "-allowed_extensions", "ALL", 
-            "-i", "master.m3u8", 
-            "-c", "copy", 
-            "-bsf:a", "aac_adtstoasc", 
-            nome_temp_simples # <--- Agora é só o nome do arquivo, sem caminho louco
+            "-y",                           # Sobrescrever se existir
+            "-allowed_extensions", "ALL",   # Permitir todas as extensões na playlist
+            "-i", "master.m3u8",            # Arquivo de entrada (playlist principal)
+            "-c", "copy",                   # Copiar streams (não re-codificar, é muito mais rápido)
+            "-bsf:a", "aac_adtstoasc",      # Filtro de áudio necessário para converter .ts para .mp4
+            nome_temp_curto                 # Saída local
         ]
         
-        # print("🎬 Rodando FFmpeg...")
-        # stdout=subprocess.DEVNULL esconde o lixo visual se funcionar
-        retcode = subprocess.call(cmd, cwd=pasta_temp, stderr=subprocess.DEVNULL)
+        # Tenta rodar silencioso (DEVNULL) para não poluir o terminal
+        codigo_retorno = subprocess.call(comando_ffmpeg, cwd=pasta_temp_trabalho, stderr=subprocess.DEVNULL)
 
-        if retcode != 0:
-            # Se falhar, tentamos de novo mostrando o erro
-            print("⚠️ Primeira tentativa falhou, tentando modo verboso...")
-            retcode = subprocess.call(cmd, cwd=pasta_temp)
+        if codigo_retorno != 0:
+            print("⚠️  Primeira tentativa falhou, tentando modo verboso para ver o erro...")
+            # Se falhar, roda mostrando o erro
+            codigo_retorno = subprocess.call(comando_ffmpeg, cwd=pasta_temp_trabalho)
 
-        # 4. O Grande Movimento (Python assume o volante)
-        if retcode == 0 and os.path.exists(caminho_mp4_temp):
+        # --- 5. MOVER PARA O FINAL ---
+        if codigo_retorno == 0 and os.path.exists(caminho_mp4_temp):
             try:
-                # Move o arquivo da temp para o output final
                 shutil.move(caminho_mp4_temp, caminho_final_absoluto)
-                
-                print(f"✅ SUCESSO: Arquivo movido para {nome_final_mp4}")
+                print(f"✅ SUCESSO: Vídeo salvo em '{nome_mp4_final}'")
                 return True
-            except Exception as e:
-                print(f"❌ Erro ao mover arquivo: {e}")
+            except Exception as erro_move:
+                print(f"❌ Erro ao mover arquivo final: {erro_move}")
                 return False
         else:
-            print(f"❌ Erro: O FFmpeg falhou ou não gerou o arquivo {nome_temp_simples}")
+            print(f"❌ Erro: O FFmpeg falhou na conversão.")
             return False
 
-    except Exception as e:
-        print(f"❌ ERRO GERAL: {e}")
+    except Exception as erro_geral:
+        print(f"❌ ERRO GERAL no converter: {erro_geral}")
         return False
-
-# import os
-# import subprocess
-# from .utils import limpar_nome_arquivo
-
-# PASTA_OUTPUT = "output"
-
-# def converter_final(nome, pasta_rel, pasta_temp):
-#     dest = os.path.join(PASTA_OUTPUT, pasta_rel)
-#     os.makedirs(dest, exist_ok=True)
-    
-#     nome_final = f"{limpar_nome_arquivo(nome)}.mp4"
-#     caminho_final = os.path.abspath(os.path.join(dest, nome_final))
-
-#     # Isso vai imprimir o caminho exato no terminal
-#     print(f"🔍 [DEBUG] Caminho Final: {caminho_final}")
-    
-#     # # Proteção contra sobrescrever arquivo bom
-#     # if os.path.exists(caminho_final) and os.path.getsize(caminho_final) > 1000000: # Maior que 1MB
-#     #     return True # Já existe, finge que converteu
-
-#     cmd = [
-#         "ffmpeg", "-y", "-allowed_extensions", "ALL", 
-#         "-i", "master.m3u8", "-c", "copy", 
-#         "-bsf:a", "aac_adtstoasc", caminho_final
-#     ]
-    
-#     try:
-#             # Nota: capture_output=True esconde o output do FFmpeg, a menos que dês print no erro
-#             subprocess.run(cmd, cwd=pasta_temp, check=True, capture_output=True)
-#             print("✅ Conversão concluída com sucesso.")
-#             return True
-#     except subprocess.CalledProcessError as e:
-#         # Dica de Parceiro: Isso mostra o erro real do FFmpeg se falhar
-#         print(f"❌ Erro no FFmpeg: {e.stderr.decode('utf-8')}")
-#         return False
-#     except Exception as e:
-#         print(f"❌ Erro genérico: {e}")
-#         return False
