@@ -1,14 +1,25 @@
 {
   "manifest_version": 3,
-  "name": "Botão Download Skool+Loom",
-  "version": "2.0",
-  "permissions": ["activeTab", "scripting"],
-  "host_permissions": ["*://*.loom.com/*", "*://*.skool.com/*"],
+  "name": "Loom Downloader - Skool Edition",
+  "version": "2.5",
+  "description": "Adiciona um botão de download inteligente nos vídeos do Loom dentro do Skool.",
+  "permissions": [
+    "activeTab", 
+    "scripting"
+  ],
+  "host_permissions": [
+    "*://*.loom.com/*", 
+    "*://*.skool.com/*"
+  ],
   "content_scripts": [
     {
-      "matches": ["*://*.skool.com/*", "*://*.loom.com/*"],
+      "matches": [
+        "*://*.skool.com/*", 
+        "*://*.loom.com/*"
+      ],
       "js": ["content.js"],
-      "css": ["style.css"]
+      "css": ["style.css"],
+      "run_at": "document_idle"
     }
   ]
 }
