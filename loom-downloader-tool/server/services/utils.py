@@ -1,5 +1,6 @@
 import re
 import html
+import json
 import shutil
 import os
 import requests
@@ -38,36 +39,145 @@ def limpar_pasta(caminho):
         except Exception as e:
             print(f"⚠️ Aviso: Não foi possível limpar {caminho}: {e}")
 
+# --- EXTRAÇÃO DOS DADOS DA PÁGINA DO LOOM ------------------------------------
+#
+# A página do Loom carrega um objeto JSON completo em `window.__APOLLO_STATE__`
+# com tudo que o player precisa. Lemos DESSE objeto, pela estrutura dele.
+#
+# Por que não por regex no texto: já quebrou. O Loom renomeou o arquivo da
+# playlist de "playlist.m3u8" para "playlist-multibitrate.m3u8" e a extração
+# parou de funcionar, sem erro nenhum. Casar texto depende do formato da string;
+# ler a estrutura depende só do contrato dos dados, que muda muito menos.
+
+TIPO_URL_ASSINADA = "CloudfrontSignedUrlPayload"
+TIPO_VIDEO = "RegularUserVideo"
+
+
+def _extrair_apollo_state(conteudo_html):
+    """
+    Recorta o objeto `window.__APOLLO_STATE__` do HTML e devolve como dict.
+
+    O truque está em não tentar achar onde o objeto termina: contar chaves
+    dá errado porque existem chaves dentro de strings. Achamos onde ele
+    COMEÇA e deixamos o parser de JSON ler até o fim natural do objeto.
+    """
+    marcador = re.search(r'window\.__APOLLO_STATE__\s*=\s*', conteudo_html)
+    if not marcador:
+        return None
+
+    try:
+        dados, _ = json.JSONDecoder().raw_decode(conteudo_html, marcador.end())
+        return dados
+    except ValueError:
+        return None
+
+
+def _caminhar(no, aceita):
+    """
+    Percorre a árvore de dados e devolve o primeiro nó aceito por `aceita`.
+
+    O Apollo guarda os dados numa estrutura aninhada e com chaves geradas
+    dinamicamente (ex: 'RegularUserVideo:abc123'), então não dá para navegar
+    por um caminho fixo — procuramos pelo formato do nó.
+    """
+    if isinstance(no, dict):
+        resultado = aceita(no)
+        if resultado is not None:
+            return resultado
+        for valor in no.values():
+            achado = _caminhar(valor, aceita)
+            if achado is not None:
+                return achado
+    elif isinstance(no, list):
+        for item in no:
+            achado = _caminhar(item, aceita)
+            if achado is not None:
+                return achado
+    return None
+
+
+def _procurar_url_do_stream(dados):
+    """Acha a URL assinada do .m3u8 pelo __typename do nó."""
+    def aceita(no):
+        if no.get("__typename") != TIPO_URL_ASSINADA:
+            return None
+        url = no.get("url")
+        if isinstance(url, str) and ".m3u8" in url:
+            return url
+        return None
+
+    return _caminhar(dados, aceita)
+
+
+def _procurar_titulo(dados):
+    """Acha o nome do vídeo pelo __typename do nó."""
+    def aceita(no):
+        if no.get("__typename") != TIPO_VIDEO:
+            return None
+        nome = no.get("name")
+        return nome if isinstance(nome, str) and nome.strip() else None
+
+    return _caminhar(dados, aceita)
+
+
+def _titulo_pela_tag_title(conteudo_html):
+    """Reserva: pega o título da tag <title> quando o Apollo não tem o nome."""
+    match = re.search(r'<title>(.*?)</title>', conteudo_html, re.S)
+    if not match:
+        return None
+    return match.group(1).replace(" | Loom", "")
+
+
+def _url_por_regex(conteudo_html):
+    """
+    ÚLTIMO RECURSO. Mantido de propósito: se o Loom mudar o formato do
+    __APOLLO_STATE__, isto ainda pode salvar o download. Quando cair aqui,
+    avisamos — degradar em silêncio foi o que custou caro da última vez.
+    """
+    match = re.search(r'"url":"(https://[^"]+\.m3u8[^"]*)"', conteudo_html)
+    if not match:
+        return None
+    return match.group(1).replace('\\/', '/')
+
+
 def extrair_metadados(url_loom):
     """
-    Acessa a página do vídeo (embed) e tenta descobrir:
+    Acessa a página do vídeo (embed) e descobre:
     1. O título original
     2. A URL da playlist (m3u8)
+
+    Devolve (None, None) se a página não puder ser acessada.
     """
     try:
         resposta = requests.get(url_loom, headers=HEADERS, timeout=10)
         conteudo_html = resposta.text
-        
-        # Busca o Título dentro da tag <title>
-        match_titulo = re.search(r'<title>(.*?)</title>', conteudo_html)
-        if match_titulo:
-            titulo_bruto = match_titulo.group(1).replace(" | Loom", "")
-            titulo_limpo = limpar_nome_arquivo(titulo_bruto)
-        else:
-            titulo_limpo = "sem_titulo"
-            
-        # Busca a URL do stream m3u8 dentro do JSON da página.
-        # NÃO exigir o nome literal "playlist.m3u8": o Loom passou a servir
-        # "playlist-multibitrate.m3u8", e o regex antigo parou de casar (falha
-        # silenciosa -> url_m3u8 = None -> download nunca acontecia).
-        match_url = re.search(r'"url":"(https://[^"]+\.m3u8[^"]*)"', conteudo_html)
-        
-        url_m3u8 = None
-        if match_url:
-            # Corrige as barras invertidas do JSON (ex: \/)
-            url_m3u8 = match_url.group(1).replace('\\/', '/')
-            
-        return titulo_limpo, url_m3u8
-        
-    except Exception:
+    except Exception as erro:
+        print(f"⚠️  Não foi possível acessar {url_loom}: {type(erro).__name__}: {erro}")
         return None, None
+
+    dados = _extrair_apollo_state(conteudo_html)
+
+    # --- URL do stream ---
+    url_m3u8 = _procurar_url_do_stream(dados) if dados else None
+
+    if url_m3u8 is None:
+        url_m3u8 = _url_por_regex(conteudo_html)
+        if url_m3u8:
+            print("⚠️  Extração estrutural falhou; usando o regex reserva. "
+                  "O formato da página do Loom provavelmente mudou.")
+        else:
+            motivo = ("__APOLLO_STATE__ não encontrado na página"
+                      if not dados else
+                      f"nenhum nó '{TIPO_URL_ASSINADA}' com .m3u8 no __APOLLO_STATE__")
+            print(f"❌ Não foi possível extrair a URL do vídeo: {motivo}")
+
+    if url_m3u8:
+        # Desfaz as barras escapadas do JSON (ex: \/ vira /)
+        url_m3u8 = url_m3u8.replace('\\/', '/')
+
+    # --- Título ---
+    titulo_bruto = (_procurar_titulo(dados) if dados else None) \
+        or _titulo_pela_tag_title(conteudo_html)
+    titulo_limpo = limpar_nome_arquivo(titulo_bruto) if titulo_bruto else "sem_titulo"
+
+    return titulo_limpo, url_m3u8
