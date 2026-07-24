@@ -60,18 +60,31 @@ Antes de começar, precisas ter instalado na tua máquina:
 
 ### Passo 1: Servidor (Backend) — um comando
 
+**Windows (PowerShell):**
 ```powershell
 git clone https://github.com/duribeiro/loom-downloader-tool.git
 cd loom-downloader-tool
 .\setup.ps1
 ```
 
-O `setup.ps1` verifica Python e FFmpeg, cria o ambiente virtual e instala tudo.
+**Linux / macOS:**
+```bash
+git clone https://github.com/duribeiro/loom-downloader-tool.git
+cd loom-downloader-tool
+./setup.sh
+```
+
+O script verifica Python e FFmpeg, cria o ambiente virtual e instala tudo.
 Ele é **idempotente**: pode rodar quantas vezes quiser, e nunca apaga um `venv`
 que já exista.
 
 Se algum pré-requisito estiver faltando, ele para com a instrução exata do que
 instalar — em vez de falhar mais adiante com um erro obscuro.
+
+> **Windows:** o `.\` na frente é obrigatório; o PowerShell não executa nada do
+> diretório atual sem ele. Se der erro de política de execução (acontece quando o
+> arquivo veio de um `.zip` baixado, que o Windows marca), rode
+> `Unblock-File .\setup.ps1` antes.
 
 ### Passo 2: Extensão (Frontend) — manual
 
@@ -90,8 +103,14 @@ Este passo o Chrome não permite automatizar:
 
 1.  **Inicie o Servidor:**
     No terminal, **de dentro de `loom-downloader-tool/`**, rode:
+
     ```powershell
+    # Windows
     .\venv\Scripts\python.exe server\app.py
+    ```
+    ```bash
+    # Linux / macOS
+    ./venv/bin/python server/app.py
     ```
     *Você verá o Dashboard iniciar e o servidor subir na porta 5000.*
 
@@ -110,7 +129,7 @@ Este passo o Chrome não permite automatizar:
 
 ## 📸 Screenshots
 
-*![Dashboard no terminal](../assets/image.png)*
+*![Dashboard no terminal](assets/image.png)*
 
 ---
 
