@@ -19,3 +19,6 @@ trash/
 .vscode/
 # Cache do pytest
 .pytest_cache/
+
+# Crash dumps do Git Bash
+*.stackdump
