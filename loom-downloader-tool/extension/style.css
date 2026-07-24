@@ -74,11 +74,3 @@
     cursor: default;
     transform: none;
 }
-
-/* Estado de confirmação (após o dry-run) */
-.botao-curso-inteiro.confirmar {
-    background-color: #00b894;   /* verde: pronto para confirmar */
-}
-.botao-curso-inteiro.confirmar:hover {
-    background-color: #00a383;
-}

@@ -105,6 +105,23 @@ function obterNextData() {
     }
 }
 
+// Containers da árvore do curso: dão o CAMINHO (Curso/Módulo), não viram aula.
+// Todo o resto é folha = aula, seja qual for o unitType (module, page, article...).
+// Isso honra a intenção documentada: "nenhuma aula do curso é omitida".
+const CONTAINERS = new Set(['course', 'set']);
+
+function metaDe(no) {
+    // O Skool às vezes entrega metadata como objeto, às vezes como string JSON.
+    // Normaliza para objeto; devolve null se não der para aproveitar.
+    if (!no) return null;
+    const m = no.metadata;
+    if (m && typeof m === 'object') return m;
+    if (typeof m === 'string' && m) {
+        try { return JSON.parse(m); } catch (e) { return null; }
+    }
+    return null;
+}
+
 function coletarUnits(raiz) {
     // Travessia genérica: junta todo objeto que seja um "unit" do Skool
     // (id + unitType + metadata), sem depender de como o Skool aninha.
@@ -113,7 +130,7 @@ function coletarUnits(raiz) {
     (function anda(no) {
         if (!no || typeof no !== 'object') return;
         if (Array.isArray(no)) { no.forEach(anda); return; }
-        if (typeof no.id === 'string' && no.unitType && no.metadata && typeof no.metadata === 'object') {
+        if (typeof no.id === 'string' && no.unitType && metaDe(no)) {
             if (!vistos.has(no.id)) { vistos.add(no.id); porId[no.id] = no; }
         }
         for (const k of Object.keys(no)) anda(no[k]);
@@ -128,8 +145,9 @@ function caminhoDaAula(unit, porId) {
     let atual = porId[unit.parentId];
     let guarda = 0;
     while (atual && guarda++ < 20) {
-        if (atual.unitType === 'course') { curso = atual.metadata.title; break; }
-        if (atual.unitType === 'set') modulos.unshift(atual.metadata.title);
+        const m = metaDe(atual) || {};
+        if (atual.unitType === 'course') { curso = m.title; break; }
+        if (atual.unitType === 'set') modulos.unshift(m.title);
         atual = porId[atual.parentId];
     }
     return { curso, modulos };
@@ -150,13 +168,25 @@ function coletarAulasDoCurso() {
     const comunidade = (cg.metadata && cg.metadata.displayName) || cg.name || 'Skool';
     const porId = coletarUnits(pp.course);
 
+    // Diagnóstico: quantos units de cada unitType existem. Se uma aula "não baixa",
+    // isto revela na hora se ela era de um tipo que estávamos descartando.
+    const porTipo = {};
+    for (const u of Object.values(porId)) porTipo[u.unitType] = (porTipo[u.unitType] || 0) + 1;
+    console.log('[Loom] unitTypes encontrados:', porTipo);
+
     const aulas = [];
     for (const unit of Object.values(porId)) {
-        if (unit.unitType !== 'module') continue;  // só aulas são folhas
+        // Containers (course/set) só dão o caminho — não viram aula.
+        // Todo o resto é folha e ENTRA, seja qual for o unitType: assim uma aula
+        // de texto (unitType diferente de 'module') não some em silêncio.
+        if (CONTAINERS.has(unit.unitType)) continue;
 
-        const meta = unit.metadata || {};
+        const meta = metaDe(unit) || {};
         const videoLink = meta.videoLink || '';
         const ehLoom = /loom\.com\/(embed|share)\//.test(videoLink);
+        const desc = meta.desc || '';
+        const resources = meta.resources || '';
+        const temTexto = !!(desc || resources);
 
         // Inclui TODA aula do curso — inclusive as vazias (sem vídeo nem texto).
         // O servidor grava um .md placeholder para elas, para que nenhuma aula
@@ -173,9 +203,11 @@ function coletarAulasDoCurso() {
             url: ehLoom ? videoLink : '',
             folder: pasta,
             filename: limparTexto(meta.title || 'Aula sem titulo'),
-            desc: meta.desc || '',
-            resources: meta.resources || '',
+            desc: desc,
+            resources: resources,
             _temVideo: ehLoom,
+            _temTexto: temTexto,
+            _unitType: unit.unitType,
         });
     }
     return aulas;
@@ -281,43 +313,50 @@ function criarBotaoCurso() {
     btn.innerText = '📚 Baixar curso inteiro';
     document.body.appendChild(btn);
 
-    let aulasPendentes = null;   // preenchido no dry-run (1º clique)
-
     btn.onclick = async () => {
-        // --- ETAPA 1: dry-run. Coleta e mostra, sem baixar nada. ---
-        if (!aulasPendentes) {
-            const aulas = coletarAulasDoCurso();
-            if (!aulas.length) {
-                btn.innerText = '❌ Nenhuma aula encontrada';
-                setTimeout(() => { btn.innerText = '📚 Baixar curso inteiro'; }, 3000);
-                return;
-            }
-            aulasPendentes = aulas;
+        if (btn.disabled) return;   // já enfileirando; ignora cliques repetidos
 
-            const comVideo = aulas.filter(a => a._temVideo).length;
-            const soTexto = aulas.length - comVideo;
-
-            console.log(`[Loom] === PRÉVIA: ${aulas.length} aulas ` +
-                        `(${comVideo} com vídeo, ${soTexto} só texto) ===`);
-            console.table(aulas.map(a => ({
-                pasta: a.folder, arquivo: a.filename, video: a._temVideo ? 'sim' : '—',
-            })));
-            console.log('[Loom] Confira acima. Clique de novo para ENFILEIRAR.');
-
-            btn.innerText = `✅ Enfileirar ${aulas.length} aulas? (confira o console)`;
-            btn.classList.add('confirmar');
+        const aulas = coletarAulasDoCurso();
+        if (!aulas.length) {
+            btn.innerText = '❌ Nenhuma aula encontrada';
+            setTimeout(() => { btn.innerText = '📚 Baixar curso inteiro'; }, 3000);
             return;
         }
 
-        // --- ETAPA 2: confirma. Dispara os POSTs. ---
-        const total = aulasPendentes.length;
+        const comVideo = aulas.filter(a => a._temVideo).length;
+        const soTexto = aulas.length - comVideo;
+
+        // Log informativo — dá para conferir os caminhos no console se quiser,
+        // mas NÃO é mais uma trava: o download dispara na mesma ação.
+        // A coluna 'texto' mostra se desc/resources foram capturados: uma aula de
+        // texto que apareça com texto='—' aponta o problema direto ao campo.
+        console.log(`[Loom] === ${aulas.length} aulas ` +
+                    `(${comVideo} com vídeo, ${soTexto} sem vídeo) ===`);
+        console.table(aulas.map(a => ({
+            pasta: a.folder,
+            arquivo: a.filename,
+            tipo: a._unitType,
+            video: a._temVideo ? 'sim' : '—',
+            texto: a._temTexto ? 'sim' : '—',
+        })));
+
+        // Uma única confirmação antes de disparar downloads em massa.
+        const ok = confirm(
+            `Baixar o curso inteiro?\n\n` +
+            `${aulas.length} aulas — ${comVideo} com vídeo, ${soTexto} só texto.\n` +
+            `Isso vai enfileirar ${aulas.length} pedidos no servidor local (localhost:5000).`
+        );
+        if (!ok) {
+            btn.innerText = '📚 Baixar curso inteiro';
+            return;
+        }
+
+        // Confirmado: dispara os POSTs.
         btn.disabled = true;
-        btn.classList.remove('confirmar');
-        const enviadas = await enfileirarCurso(aulasPendentes, (i, n) => {
+        const enviadas = await enfileirarCurso(aulas, (i, n) => {
             btn.innerText = `📡 Enfileirando ${i}/${n}...`;
         });
         btn.innerText = `⏳ ${enviadas} aulas na fila — veja o terminal`;
-        aulasPendentes = null;
         setTimeout(() => {
             btn.disabled = false;
             btn.innerText = '📚 Baixar curso inteiro';
