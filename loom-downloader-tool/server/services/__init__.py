@@ -11,5 +11,6 @@ from .utils import (
 from .downloader import processar_download
 from .converter import converter_final
 
-# Define uma constante global para o projeto todo usar
-PASTA_TEMP_RAIZ = "hls-temp"
+# Caminhos do projeto, definidos num lugar só (services/caminhos.py) e
+# reexportados aqui para manter a API pública: `from services import PASTA_...`
+from .caminhos import PASTA_OUTPUT, PASTA_TEMP_RAIZ

@@ -2,13 +2,7 @@ import os
 import subprocess
 import shutil
 from .utils import limpar_nome_arquivo
-
-# --- 1. CONFIGURAÇÃO DE CAMINHOS ---
-# Calcula dinamicamente onde está a raiz do projeto para encontrar a pasta 'output'
-dir_atual = os.path.dirname(os.path.abspath(__file__)) # .../services
-dir_server = os.path.dirname(dir_atual)                # .../server
-dir_raiz = os.path.dirname(dir_server)                 # .../loom-downloader-tool
-PASTA_OUTPUT = os.path.join(dir_raiz, "output")        # .../loom-downloader-tool/output
+from .caminhos import PASTA_OUTPUT  # definição única, compartilhada com downloader.py
 
 def converter_final(nome_arquivo, pasta_relativa_destino, pasta_temp_trabalho):
     """
