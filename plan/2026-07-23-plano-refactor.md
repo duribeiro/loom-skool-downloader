@@ -638,9 +638,33 @@ bloqueado à automação). Então:
   placeholder. 65 testes verdes.
 
 **Confirmação final ainda depende do usuário:** recarregar a extensão, clicar, e ler o
-`console.table` — a coluna `texto` mostra se os dois `?md=` saem com `texto=sim`. Se saírem
-`texto=—`, o `desc` mora noutro campo que não `metadata.desc` (próximo passo seria mapear
-onde, com o JSON real em mãos).
+`console.table` — a coluna `texto` mostra se os dois `?md=` saem com `texto=sim`.
+
+## Fase 4.2 — Texto da aula: causa real e fix por invariante (2026-07-24, commit `60e27e4`)
+
+Feedback do usuário: a **fila funciona** (todas as aulas foram enfileiradas no teste dele),
+mas o **texto embaixo do vídeo** e o das **aulas só-texto** não eram salvos. Ou seja: não
+era a coleta (Fase 4.1) — era a **captura do `desc`**.
+
+Lendo a transcrição da sessão anterior (`cea3165e-…jsonl`), a "prova" de que o texto morava
+em `metadata.desc` era um **agregado**: `todas_as_chaves_de_metadata` = união de chaves de
+TODOS os nós (misturava campos de container — `numModules`, `privacy`, `coverImage` — com os
+de aula). O nó de aula-folha medido isoladamente **não tinha `desc`**. Logo, `meta.desc` vem
+vazio nas aulas coletadas → texto nunca capturado. Foi a raiz.
+
+**O que está medido com certeza (invariantes de conteúdo):**
+- `desc` = string que **começa com `[v2]`** (rich-text; `comeca_com: "[v2][{\"type\":\"paragraph\""`, tam ~312)
+- `resources` = JSON array de `{title, link}`
+
+**Fix:** `pareceDesc`/`pareceResources` + `buscarNaUnit` — se `metadata.desc` vier vazio,
+busca dentro da própria aula por essas FORMAS (não por nome de campo), sem cruzar a fronteira
+para outra unit. Vale para aula com vídeo (grava `.md` ao lado do `.mp4`) e só-texto.
+Medido com harness Node em 4 aninhamentos; 65 testes verdes.
+
+**Ainda pende medir na página real:** se, mesmo assim, a coluna `texto` sair `—` para alguma
+aula, é sinal de que o `desc` daquela aula NÃO está na árvore `course` (Skool só faz SSR do
+`desc` da aula aberta, em `pageProps.selectedModule`) — aí o crawler não alcança de uma
+página só e seria preciso outra estratégia (navegar/append por aula). Só o clique real diz.
 
 ---
 
