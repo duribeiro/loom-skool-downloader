@@ -41,11 +41,29 @@ leitura estrutural só.
 16 `__typename` distintos na árvore. Ancorar em `CloudfrontSignedUrlPayload` é seguro:
 aparece exatamente 1×.
 
-### 3. O venv NÃO pode ser movido
+### 3. O venv se RECRIA, não se move (corrigido após feedback do usuário)
 
-`venv/` fica em `hsl-lab/venv`. Um venv tem caminhos **absolutos** gravados em
-`pyvenv.cfg` e nos scripts de `Scripts/`. Mover a pasta quebra o venv silenciosamente.
-Na Fase 1 o venv **permanece onde está**; quem resolve isso é o script de setup.
+Correção: a afirmação anterior ("não pode ser movido") estava errada em espírito — o
+usuário tem razão de que deixar o venv fora da pasta do projeto é bagunça e deve ser
+resolvido. O que muda é a **técnica**.
+
+Medido em `hsl-lab/venv` — 31,6 MB, 2507 arquivos, caminhos absolutos em:
+
+```
+pyvenv.cfg                                     -> texto (fácil de editar)
+Scripts/activate, activate.bat, activate.fish  -> texto (fácil de editar)
+Scripts/{flask,pip,pip3,normalizer,idna,...}.exe -> BINÁRIOS com o caminho embutido
+```
+
+Os `.exe` são launchers do Windows com o caminho do python **dentro do binário**. Mover e
+corrigir exigiria regerar cada um.
+
+**Decisão:** um venv é artefato **derivado**, não fonte — sai inteiro de um
+`pip install -r requirements.txt` em ~20 s, e é por isso que está no `.gitignore`. Então
+ele é **destruído e recriado** no lugar certo. Sem patch de binário, sem risco de um venv
+meio-quebrado que só falha semanas depois.
+
+Pré-requisito: **o servidor precisa estar parado** — não dá para apagar um venv em uso.
 
 ### 4. O .gitignore não precisa mudar
 
@@ -54,14 +72,75 @@ Mover arquivos não afeta.
 
 ---
 
-## Decisão pendente
+## Decisão D1 — RESOLVIDA
 
-**D1 — a perna "API" da Fase 3.** Como medido, o endpoint devolve 204 vazio. Opções:
-- **(a)** Implementar só o parse estrutural do Apollo (recomendado) — já provado, resolve
-  o problema real, e é estritamente melhor que o regex de hoje.
-- **(b)** Investigar o front-end do Loom para descobrir o contrato real da API antes de
-  implementar. Custa tempo, sem garantia.
-- **(c)** Implementar (a) agora, deixando uma porta aberta para a API depois.
+**Escolha do usuário: (a)** — só o parse estrutural do Apollo. A perna "API" sai do escopo;
+o endpoint devolve 204 vazio e implementá-la exigiria engenharia reversa sem garantia.
+O parse estrutural já está provado e é estritamente melhor que o regex atual.
+
+---
+
+## Ponto de partida
+
+Commit `60acc93` na branch `Dev` — conserto do regex + registro do diagnóstico + este plano.
+Árvore de trabalho limpa. É o ponto de rollback de tudo que vier a seguir.
+
+---
+
+## ✅ FASE 1 — CONCLUÍDA (2026-07-23)
+
+| Tarefa | Resultado |
+|---|---|
+| 1.1 Mover requirements + README | `git mv`, histórico preservado, destino estava livre |
+| 1.1b Recriar venv | Antigo removido; novo em `loom-downloader-tool/venv`, 18 pacotes |
+| 1.2 Verificar imports | `IMPORT OK`, `PASTA_TEMP_RAIZ` resolvendo |
+| 1.3 `setup.ps1` | Idempotente (2× seguidas) + clone limpo do zero |
+| 1.4 README | Setup de um comando; caminho da imagem corrigido |
+
+### Validação do setup.ps1 em clone limpo
+
+```
+venv existe antes? False
+=== 3/5  Ambiente virtual ===
+  Criando venv...
+  [OK] venv criado
+=== 4/5  Instalando dependencias ===
+  [OK] flask, flask-cors, requests, rich
+venv existe depois? True
+
+PORTA 5000 ESCUTANDO apos 1s
+POST /baixar -> HTTP 200 {"mensagem":"Adicionado à fila","status":"ok"}
+porta 5000 livre depois? True
+```
+
+### Estrutura resultante
+
+```
+hsl-lab/
+├── assets/                  (imagens do README)
+├── plan/                    (registro durável)
+├── AGENTS.md, CLAUDE.md, opencode.json
+└── loom-downloader-tool/
+    ├── README.md            ← desceu
+    ├── requirements.txt     ← desceu
+    ├── setup.ps1            ← novo
+    ├── venv/                ← recriado aqui
+    ├── server/, extension/, output/
+```
+
+### Achados durante a execução
+
+1. **`assets/image.png` no README quebrou ao mover.** A imagem mora na raiz do repo;
+   com o README um nível abaixo, o caminho relativo deixou de resolver. Corrigido para
+   `../assets/image.png` e verificado.
+2. **Dois bugs meus no `setup.ps1`, pegos pelo teste:** precedência do cast `[version]`
+   (aplicava ao array antes do `-join`) e `Write-Host "x" + "y"`, que o PowerShell trata
+   como argumentos posicionais em vez de concatenar. Ambos só apareceram porque o script
+   foi executado de verdade — revisão visual não teria pego.
+3. **O venv novo tinha as dependências já satisfeitas** logo após ser criado. Não tenho
+   explicação confirmada (provável cache de wheels do pip). O que **foi** verificado:
+   `sys.prefix` aponta para o venv novo, `flask.__file__` está dentro dele e
+   `include-system-site-packages = false`. Isolamento correto.
 
 ---
 
@@ -85,6 +164,43 @@ dois arquivos; `ls` na raiz não os lista mais.
 **Rollback:** `git reset --hard HEAD` (só se não houver outra mudança não commitada).
 **Risco:** Baixo — `git mv` preserva histórico.
 **Critério para Avançar:** ambos os arquivos existem no novo local e o git registrou o rename.
+
+Status:
+- [ ] feito
+- [ ] bloqueado
+
+---
+
+### Tarefa 1.1b - Recriar o venv dentro da pasta do projeto
+
+**Objetivo:** acabar com o venv órfão na raiz. Ele é artefato derivado — recria-se, não se move.
+**Arquivo/Local Alvo:** destruir `hsl-lab\venv` → criar `hsl-lab\loom-downloader-tool\venv`
+**Comando Exato:**
+```powershell
+# 1. PARAR o servidor primeiro -- nao da para apagar um venv em uso
+Get-NetTCPConnection -LocalPort 5000 -State Listen -ErrorAction SilentlyContinue |
+  ForEach-Object { Stop-Process -Id $_.OwningProcess -Force }
+
+# 2. conferir que a porta ficou livre ANTES de apagar
+Get-NetTCPConnection -LocalPort 5000 -State Listen -ErrorAction SilentlyContinue
+
+# 3. recriar no lugar certo
+cd "E:\CURSOS\Programação\Projetos\loom-downloader\hsl-lab"
+Remove-Item -Recurse -Force venv
+cd loom-downloader-tool
+python -m venv venv
+.\venv\Scripts\python.exe -m pip install -r requirements.txt
+```
+**Quando Executar:** após 1.1, com o servidor parado e confirmado parado.
+**Como Validar:**
+`.\venv\Scripts\python.exe -c "import flask, rich, requests; print('DEPS OK')"` imprime `DEPS OK`;
+`Test-Path ..\venv` retorna `False`.
+**Rollback:** recriar na raiz com os mesmos comandos. O venv não está no git (é ignorado),
+então não há histórico a perder — só 20 s de reinstalação.
+**Risco:** **Médio.** É um `Remove-Item -Recurse -Force` numa pasta que o usuário criou.
+Só executar depois de confirmar a porta livre. O `.gitignore` já cobre `venv/` em qualquer
+profundidade, então o novo local não vaza para o git.
+**Critério para Avançar:** `DEPS OK` a partir do venv novo e o antigo inexistente.
 
 Status:
 - [ ] feito

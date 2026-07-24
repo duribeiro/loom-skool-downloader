@@ -58,45 +58,45 @@ Antes de começar, precisas ter instalado na tua máquina:
 
 ## 🚀 Instalação
 
-### Passo 1: Configurar o Servidor (Backend)
+### Passo 1: Servidor (Backend) — um comando
 
-1.  Clone este repositório:
-    ```bash
-    git clone [https://github.com/SEU-USUARIO/loom-downloader-tool.git](https://github.com/SEU-USUARIO/loom-downloader-tool.git)
-    cd loom-downloader-tool
-    ```
+```powershell
+git clone https://github.com/duribeiro/loom-downloader-tool.git
+cd loom-downloader-tool
+.\setup.ps1
+```
 
-2.  Crie um ambiente virtual (recomendado) e instale as dependências:
-    ```bash
-    # Criar venv
-    python -m venv venv
+O `setup.ps1` verifica Python e FFmpeg, cria o ambiente virtual e instala tudo.
+Ele é **idempotente**: pode rodar quantas vezes quiser, e nunca apaga um `venv`
+que já exista.
 
-    # Ativar venv (Windows)
-    venv\Scripts\activate
-    # Ativar venv (Mac/Linux)
-    source venv/bin/activate
+Se algum pré-requisito estiver faltando, ele para com a instrução exata do que
+instalar — em vez de falhar mais adiante com um erro obscuro.
 
-    # Instalar pacotes
-    pip install -r requirements.txt
-    ```
+### Passo 2: Extensão (Frontend) — manual
 
-### Passo 2: Instalar a Extensão (Frontend)
+Este passo o Chrome não permite automatizar:
 
-1.  Abra o Chrome e vá para `chrome://extensions`.
+1.  Abra `chrome://extensions`.
 2.  Ative o **"Modo do desenvolvedor"** (canto superior direito).
 3.  Clique em **"Carregar sem compactação"** (Load unpacked).
 4.  Selecione a pasta `extension` dentro deste projeto.
+
+> O caminho completo da pasta é impresso pelo `setup.ps1` no final — é só copiar.
 
 ---
 
 ## 🕹 Como Usar
 
 1.  **Inicie o Servidor:**
-    No terminal, dentro da pasta do projeto, rode:
-    ```bash
-    python server/app.py
+    No terminal, **de dentro de `loom-downloader-tool/`**, rode:
+    ```powershell
+    .\venv\Scripts\python.exe server\app.py
     ```
-    *Você verá o Dashboard iniciar e a mensagem de que o servidor está rodando na porta 5000.*
+    *Você verá o Dashboard iniciar e o servidor subir na porta 5000.*
+
+    > **A pasta importa.** `PASTA_TEMP_RAIZ` é relativo ao diretório atual — rodar
+    > de outro lugar espalha os arquivos temporários no lugar errado.
 
 2.  **Vá para o Skool:**
     Acesse a aula que deseja baixar no seu navegador.
@@ -110,7 +110,7 @@ Antes de começar, precisas ter instalado na tua máquina:
 
 ## 📸 Screenshots
 
-*![a](assets/image.png)*
+*![Dashboard no terminal](../assets/image.png)*
 
 ---
 
