@@ -1,8 +1,27 @@
 # Plano de Refactor — 2026-07-23
 
-**Estado:** aguardando sinal verde. Nada executado.
+**Estado (2026-07-24): Fases 1 a 4 CONCLUÍDAS.** Todas commitadas, árvore limpa,
+65 testes verdes. Falta só o usuário validar o crawler clicando na extensão e o
+disparo real dos downloads.
 
-Decisões do usuário: Fase 1 = "descer" · Fase 3 = API + fallback · Fase 4 = via extensão.
+Decisões do usuário: Fase 1 = "descer" · Fase 3 = só parse estrutural (a API do
+Loom devolveu 204 vazio) · Fase 4 = crawler via extensão, curso inteiro,
+pastas Comunidade/Curso/Módulo/Aula, texto em Markdown.
+
+### Linha do tempo (commits)
+
+```
+60acc93  fix   Loom renomeou playlist.m3u8 -> extração voltou a funcionar
+ebabb91  refac Fase 1: estrutura reorganizada + setup.ps1
+84cc97b  feat  setup.sh (Linux) + assets/ para dentro
+52a2ac1  test  Fase 2: rede de segurança (43 testes, fixtures + smoke ao vivo)
+a7b29c4  refac Fase 3.1/3.2: extração por estrutura (Apollo), não por regex
+db40b47  refac Fase 3.3/3.4/3.5: parser HLS, falhas visíveis, PASTA_OUTPUT único
+7609856  feat  Fase 3.6: recusa porta ocupada + encerramento blindado
+9c2147b  docs  Fase 4: exploração e desenho do crawler
+ebfa94b  feat  Fase 4: crawler de curso inteiro + captura de texto
+2e8ad36  fix   Fase 4: aulas vazias viram .md placeholder
+```
 
 ---
 
@@ -562,7 +581,40 @@ Decisões do usuário: **curso inteiro** (não só o módulo atual); pastas
 - A extração no lado do servidor: cada `videoLink` é uma URL de embed do Loom que já passa
   pela `extrair_metadados` reescrita na Fase 3.
 
-## Microtarefas (a executar)
+## ✅ FASE 4 — CONCLUÍDA (2026-07-24)
+
+Commits `ebfa94b` (crawler + texto) e `2e8ad36` (aulas vazias).
+
+| Entregue | Como |
+|---|---|
+| Botão "Baixar curso inteiro" | `content.js`, fixo no canto, dry-run em 2 cliques |
+| Coleta do curso | lê `__NEXT_DATA__`, travessia por `parentId` |
+| Captura de texto | `desc`+`resources` → `.md` via `services/texto.py` |
+| Conversor rich-text `[v2]` | ProseMirror-like → Markdown, tolerante |
+| 3 casos de aula | vídeo+texto / só vídeo / só texto — todos no `worker_download` |
+| Aulas vazias | `.md` placeholder, nenhuma omitida |
+
+### Validado (dry-run ao vivo, curso GANG.EXE)
+
+- **22 aulas**: 20 com vídeo + 2 placeholders (`Intro. MoneySkills`, `Storyads`)
+- Pastas `BACKROOM.EXE/GANG.EXE/{Money Skills,Ativos digitais,Moneybrand}` — corretas
+- Comunidade via `currentGroup.metadata.displayName` (não o slug) — bate com o botão individual
+- 65 testes verdes (25 novos)
+
+### Dois bugs pegos no dry-run, ANTES de baixar
+
+1. Comunidade saía como slug `backroomexe-3259` → corrigido para `BACKROOM.EXE`.
+2. Duas aulas (não uma) eram puladas por estarem vazias → agora viram placeholder.
+
+### NÃO testado ainda (depende do usuário)
+
+- Clicar no botão real na extensão recarregada.
+- O disparo real dos downloads (~350 MB, decisão do usuário no momento).
+- Cursos com estrutura diferente de GANG.EXE (o dry-run é a proteção).
+
+---
+
+## Microtarefas (referência do desenho — todas executadas acima)
 
 ### Tarefa 4.1 - Função que lê o __NEXT_DATA__ e monta a lista de aulas
 **Arquivo:** `extension/content.js`. Função `coletarAulasDoCurso()` que devolve
