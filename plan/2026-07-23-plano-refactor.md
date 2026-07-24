@@ -498,19 +498,89 @@ Status:
 
 ---
 
-# FASE 4 — Crawler de módulos (via extensão)
+# FASE 4 — Crawler de curso (via extensão)
 
-> Desenho a fechar **depois** da Fase 3. O que já se sabe:
->
-> - `max_workers=3` (`routes.py:24`) é **concorrência, não capacidade**. Enfileirar 200
->   aulas funciona; processa 3 por vez. **Não precisa mexer.**
-> - A extensão já detecta o iframe do Loom e já lê comunidade/curso/aula do `document.title`
->   corretamente (validado no navegador em 23/07).
-> - O desafio real é **enumerar as aulas** dentro da SPA do Skool sem quebrar a navegação.
->   Precisa de exploração no navegador antes de virar microtarefa.
->
-> Entregável previsto: botão "⬇ Baixar módulo inteiro" que percorre as aulas e faz um POST
-> por aula. Precisa de: rate limit entre POSTs, e feedback de progresso no dashboard.
+## Exploração no navegador — CONCLUÍDA (2026-07-24)
+
+Feita com claude-in-chrome na sessão logada do usuário, curso GANG.EXE. Só foram lidos
+nomes de chave, contagens e enums — nenhum valor sensível (o filtro de segurança bloqueou
+o conteúdo do `__NEXT_DATA__`, que carrega tokens; medimos só o shape).
+
+### Descoberta central
+
+Todas as aulas do curso estão no `__NEXT_DATA__` da página (JSON de SSR do Next.js, 274 KB).
+**Não é preciso navegar aula a aula** — o crawler lê o JSON e enfileira tudo de uma vez.
+
+Decisões de arquitetura que isso força:
+- **O crawler MORA na extensão**, não no agente. A ferramenta de automação é bloqueada de
+  ler o `__NEXT_DATA__` (tokens de sessão). A extensão roda como código do usuário no
+  contexto da página, sem esse filtro.
+- O crawler extrai só `title`/`videoLink`/caminho e faz POST ao `localhost:5000`. Nenhum
+  token sai da página.
+
+### Modelo de dados (validado)
+
+`props.pageProps`:
+- `currentGroup.name` → nome da **Comunidade**
+- `course` → a árvore do curso
+
+Cada "unit" é um objeto com `{ id, unitType, parentId, rootId, metadata }`. `metadata` tem
+`{ title, videoLink, videoLenMs, ... }`. Três `unitType` no curso medido:
+
+| unitType | contagem | papel | tem Loom |
+|---|---|---|---|
+| `course` | 1 | o curso (raiz, sem parentId) | — |
+| `set` | 3 | módulo / seção agrupadora | não |
+| `module` | 22 | aula (folha) | 20 de 22 |
+
+25 de 26 units têm `parentId` (só a raiz não tem). Alguns `module` não têm vídeo (aula de
+texto) — o crawler pula quem não tem `videoLink` de Loom. Havia YouTube em OUTRA parte da
+página (não dentro de `course`), então filtrar por `loom.com` no `videoLink` é obrigatório.
+
+### Algoritmo do crawler (robusto por parentesco, não por aninhamento)
+
+1. Parseia `__NEXT_DATA__`.
+2. Travessia genérica de `props.pageProps.course`: coleta todo objeto que seja unit
+   (`id` + `unitType` + `metadata`) num mapa `id -> unit`. Genérica de propósito — não
+   depende de como o Skool aninha, sobrevive a mudança de estrutura.
+3. Para cada unit `module` cujo `metadata.videoLink` contém `loom.com`:
+   - `filename` = `metadata.title`
+   - sobe pela cadeia `parentId`: o `set` pai dá o **Módulo**, a raiz dá o **Curso**
+   - `folder` = `{currentGroup.name}/{curso}/{modulo}` (decisão do usuário: incluir módulo)
+   - reutiliza `limparTexto` (já existe em content.js) em cada segmento do caminho
+4. Um POST `/baixar` por aula, com **rate limit** entre eles (ex.: 300–500 ms) para não
+   floodar o servidor nem o CDN.
+5. Feedback no botão: "enfileirando X de N".
+
+Decisões do usuário: **curso inteiro** (não só o módulo atual); pastas
+**Comunidade/Curso/Módulo/Aula**.
+
+### O que NÃO muda
+
+- `max_workers=3` (`routes.py`) é concorrência, não capacidade. 20 aulas na fila
+  funcionam; processa 3 por vez. Não mexer.
+- A extração no lado do servidor: cada `videoLink` é uma URL de embed do Loom que já passa
+  pela `extrair_metadados` reescrita na Fase 3.
+
+## Microtarefas (a executar)
+
+### Tarefa 4.1 - Função que lê o __NEXT_DATA__ e monta a lista de aulas
+**Arquivo:** `extension/content.js`. Função `coletarAulasDoCurso()` que devolve
+`[{url, folder, filename}]`. Testável isolando o JSON.
+
+### Tarefa 4.2 - Botão "Baixar curso inteiro"
+**Arquivo:** `extension/content.js` + `extension/style.css`. Injetado na área do classroom.
+Ao clicar: chama 4.1, confirma a contagem, dispara os POSTs com rate limit, dá feedback.
+
+### Tarefa 4.3 - Validação no navegador
+Medir com a sessão logada: a lista sai correta (20 aulas, caminhos certos)? Idealmente um
+**dry-run** que só LOGА os POSTs no console antes de disparar de verdade — para conferir
+folder/filename sem baixar nada.
+
+### Risco a tratar
+Disparar 20 downloads (~350 MB, ~20 min) é ação de efeito colateral em massa. O teste real
+exige consentimento explícito do usuário no momento. O dry-run (4.3) mitiga: valida os
+caminhos sem baixar.
 
 ---
 
