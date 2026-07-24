@@ -87,6 +87,126 @@ function obterDadosDaPagina() {
     };
 }
 
+// --- 1.5. CRAWLER DO CURSO INTEIRO ---
+// Lê o __NEXT_DATA__ do Skool (JSON de SSR do Next.js, presente no DOM) e monta
+// a lista de TODAS as aulas do curso de uma vez. Não precisa navegar aula a aula.
+
+const SERVIDOR = 'http://localhost:5000/baixar';
+
+function obterNextData() {
+    // __NEXT_DATA__ é uma tag <script> no DOM — o content script alcança.
+    const tag = document.getElementById('__NEXT_DATA__');
+    if (!tag) return null;
+    try {
+        return JSON.parse(tag.textContent);
+    } catch (e) {
+        console.error('[Loom] __NEXT_DATA__ não é JSON válido:', e);
+        return null;
+    }
+}
+
+function coletarUnits(raiz) {
+    // Travessia genérica: junta todo objeto que seja um "unit" do Skool
+    // (id + unitType + metadata), sem depender de como o Skool aninha.
+    const porId = {};
+    const vistos = new Set();
+    (function anda(no) {
+        if (!no || typeof no !== 'object') return;
+        if (Array.isArray(no)) { no.forEach(anda); return; }
+        if (typeof no.id === 'string' && no.unitType && no.metadata && typeof no.metadata === 'object') {
+            if (!vistos.has(no.id)) { vistos.add(no.id); porId[no.id] = no; }
+        }
+        for (const k of Object.keys(no)) anda(no[k]);
+    })(raiz);
+    return porId;
+}
+
+function caminhoDaAula(unit, porId) {
+    // Sobe pela cadeia parentId: os 'set' viram Módulos; o 'course' vira Curso.
+    const modulos = [];
+    let curso = null;
+    let atual = porId[unit.parentId];
+    let guarda = 0;
+    while (atual && guarda++ < 20) {
+        if (atual.unitType === 'course') { curso = atual.metadata.title; break; }
+        if (atual.unitType === 'set') modulos.unshift(atual.metadata.title);
+        atual = porId[atual.parentId];
+    }
+    return { curso, modulos };
+}
+
+function coletarAulasDoCurso() {
+    const nd = obterNextData();
+    const pp = nd && nd.props && nd.props.pageProps;
+    if (!pp || !pp.course) {
+        console.warn('[Loom] Não achei os dados do curso nesta página.');
+        return [];
+    }
+
+    // Nome "bonito" da comunidade (ex: BACKROOM.EXE), não o slug (backroomexe-3259).
+    // O displayName é o mesmo que o botão de aula individual usa (via document.title),
+    // então os dois botões gravam na MESMA pasta de comunidade.
+    const cg = pp.currentGroup || {};
+    const comunidade = (cg.metadata && cg.metadata.displayName) || cg.name || 'Skool';
+    const porId = coletarUnits(pp.course);
+
+    const aulas = [];
+    for (const unit of Object.values(porId)) {
+        if (unit.unitType !== 'module') continue;  // só aulas são folhas
+
+        const meta = unit.metadata || {};
+        const videoLink = meta.videoLink || '';
+        const ehLoom = /loom\.com\/(embed|share)\//.test(videoLink);
+        const temTexto = (meta.desc && meta.desc.length > 4) ||
+                         (meta.resources && meta.resources.length > 2);
+
+        // Pula aulas sem nada aproveitável (nem Loom, nem texto).
+        if (!ehLoom && !temTexto) continue;
+
+        const { curso, modulos } = caminhoDaAula(unit, porId);
+        const pasta = [comunidade, curso, ...modulos]
+            .filter(Boolean)
+            .map(limparTexto)
+            .join('/');
+
+        aulas.push({
+            url: ehLoom ? videoLink : '',
+            folder: pasta,
+            filename: limparTexto(meta.title || 'Aula sem titulo'),
+            desc: meta.desc || '',
+            resources: meta.resources || '',
+            _temVideo: ehLoom,
+        });
+    }
+    return aulas;
+}
+
+async function enfileirarCurso(aulas, aoProgredir) {
+    // Rate limit entre POSTs: não floodar o servidor nem o CDN.
+    let enviadas = 0;
+    for (const aula of aulas) {
+        try {
+            await fetch(SERVIDOR, {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({
+                    url: aula.url,
+                    folder: aula.folder,
+                    filename: aula.filename,
+                    desc: aula.desc,
+                    resources: aula.resources,
+                }),
+            });
+        } catch (err) {
+            console.error(`[Loom] Falha ao enfileirar "${aula.filename}":`, err);
+        }
+        enviadas++;
+        if (aoProgredir) aoProgredir(enviadas, aulas.length);
+        await new Promise(r => setTimeout(r, 400));  // respiro entre pedidos
+    }
+    return enviadas;
+}
+
 // --- 2. INJEÇÃO DO BOTÃO ---
 
 function criarBotaoDownload(iframe) {
@@ -148,6 +268,63 @@ function criarBotaoDownload(iframe) {
     iframe.parentNode.insertBefore(btn, iframe);
 }
 
+// --- 2.5. BOTÃO "BAIXAR CURSO INTEIRO" ---
+
+function criarBotaoCurso() {
+    if (document.querySelector('.botao-curso-inteiro')) return;   // já existe
+    // Só faz sentido numa página de classroom com dados de curso.
+    if (!document.getElementById('__NEXT_DATA__')) return;
+    if (!/\/classroom\//.test(location.pathname)) return;
+
+    const btn = document.createElement('button');
+    btn.className = 'botao-curso-inteiro';
+    btn.innerText = '📚 Baixar curso inteiro';
+    document.body.appendChild(btn);
+
+    let aulasPendentes = null;   // preenchido no dry-run (1º clique)
+
+    btn.onclick = async () => {
+        // --- ETAPA 1: dry-run. Coleta e mostra, sem baixar nada. ---
+        if (!aulasPendentes) {
+            const aulas = coletarAulasDoCurso();
+            if (!aulas.length) {
+                btn.innerText = '❌ Nenhuma aula encontrada';
+                setTimeout(() => { btn.innerText = '📚 Baixar curso inteiro'; }, 3000);
+                return;
+            }
+            aulasPendentes = aulas;
+
+            const comVideo = aulas.filter(a => a._temVideo).length;
+            const soTexto = aulas.length - comVideo;
+
+            console.log(`[Loom] === PRÉVIA: ${aulas.length} aulas ` +
+                        `(${comVideo} com vídeo, ${soTexto} só texto) ===`);
+            console.table(aulas.map(a => ({
+                pasta: a.folder, arquivo: a.filename, video: a._temVideo ? 'sim' : '—',
+            })));
+            console.log('[Loom] Confira acima. Clique de novo para ENFILEIRAR.');
+
+            btn.innerText = `✅ Enfileirar ${aulas.length} aulas? (confira o console)`;
+            btn.classList.add('confirmar');
+            return;
+        }
+
+        // --- ETAPA 2: confirma. Dispara os POSTs. ---
+        const total = aulasPendentes.length;
+        btn.disabled = true;
+        btn.classList.remove('confirmar');
+        const enviadas = await enfileirarCurso(aulasPendentes, (i, n) => {
+            btn.innerText = `📡 Enfileirando ${i}/${n}...`;
+        });
+        btn.innerText = `⏳ ${enviadas} aulas na fila — veja o terminal`;
+        aulasPendentes = null;
+        setTimeout(() => {
+            btn.disabled = false;
+            btn.innerText = '📚 Baixar curso inteiro';
+        }, 6000);
+    };
+}
+
 // --- 3. OBSERVADORES (O VIGIA) ---
 
 function iniciarObservador() {
@@ -163,6 +340,8 @@ function iniciarObservador() {
                 criarBotaoDownload(iframe);
             }
         });
+        // Botão de curso inteiro (aparece em qualquer aula do classroom).
+        criarBotaoCurso();
     });
     
     // Começa a vigiar o corpo da página
@@ -171,6 +350,7 @@ function iniciarObservador() {
 
 // Inicia o processo
 iniciarObservador();
+criarBotaoCurso();
 
 // Detecção de Navegação em SPA (Single Page Application)
 // Sites modernos não recarregam a página ao mudar de aula, então vigiamos a URL.
