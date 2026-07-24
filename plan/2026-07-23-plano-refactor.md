@@ -514,6 +514,42 @@ Status:
 
 ---
 
+## ✅ FASE 3 — CONCLUÍDA (2026-07-24)
+
+| Tarefa | Resultado |
+|---|---|
+| 3.1 Extrair Apollo state | `raw_decode`, sem contar chaves |
+| 3.2 URL/título por __typename | regex vira reserva com aviso; provado com URL isca |
+| 3.3 Falhas visíveis | retry 3×, parcial removido, contagem de falhas, avisos |
+| 3.4 m3u8 sem regex | parser HLS linha a linha, respeita aspas |
+| 3.5 PASTA_OUTPUT único | `services/caminhos.py`; grep confirma 1 definição |
+| 3.6 Ctrl+C + porta ocupada | porta ocupada: MEDIDO. Ctrl+C real: ver ressalva |
+
+### Ressalva honesta sobre a 3.6
+
+**Detecção de porta ocupada: funciona, medido.** Subi o servidor, tentei subir um
+segundo, ele recusou com `exit 1` e a mensagem certa. Isto resolve o sintoma que
+custou o diagnóstico de ontem (zumbi segurando a porta enquanto você acha que
+reiniciou).
+
+**Ctrl+C real: NÃO reproduzido.** Testar Ctrl+C de um terminal interativo no Windows,
+de forma automatizada, é notoriamente instável (`CTRL_C_EVENT` entre processos exige
+attach de console). Blindei por construção — handler de SIGINT/SIGTERM + `try/except
+KeyboardInterrupt` em volta do `app.run()` + `encerrar()` idempotente — mas não pude
+provar que o Ctrl+C do SEU terminal cai num desses caminhos. Precisa de um teste seu:
+subir, apertar Ctrl+C, e rodar `Get-NetTCPConnection -LocalPort 5000` para ver se
+sobrou algo.
+
+### Incidente durante o teste
+
+A varredura de órfãos do meu próprio teste tinha filtro largo demais (`*server*app.py*`)
+e matou o servidor que o usuário tinha rodando, além dos do teste. Sem download em
+curso e a temp é limpa no encerramento, então o efeito foi só "precisa subir de novo".
+Registrado para não repetir: nunca varrer processos por nome de script no ambiente do
+usuário.
+
+---
+
 ## Checklist final (rodar ao término de todas as fases)
 
 - [ ] `pytest -v` verde
