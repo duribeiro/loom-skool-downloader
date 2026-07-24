@@ -127,6 +127,35 @@ Este passo o Chrome não permite automatizar:
 
 ---
 
+## 🧪 Testes
+
+```powershell
+.\venv\Scripts\python.exe -m pip install -r requirements-dev.txt
+.\venv\Scripts\python.exe -m pytest          # rápido, sem internet
+.\venv\Scripts\python.exe -m pytest -m rede  # bate no Loom de verdade
+```
+
+São **dois tipos de teste, com propósitos diferentes** — e um não substitui o outro:
+
+| | O que protege | Quando roda |
+|---|---|---|
+| **Suíte padrão** | Contra **nós** quebrarmos o código | Sempre. Usa fixtures congeladas, não precisa de internet |
+| **`-m rede`** | Contra o **Loom** mudar a página | Sob demanda. Precisa de internet |
+
+A distinção importa. Uma fixture está congelada: se o Loom mudar o formato da
+página amanhã, os testes de fixture continuam verdes para sempre — projeto
+quebrado, suíte passando. Foi exatamente o que aconteceu quando eles renomearam
+`playlist.m3u8` para `playlist-multibitrate.m3u8`.
+
+**Se um teste `-m rede` falhar, não é bug — é manutenção.** O Loom mudou algo.
+Baixe o HTML novo, veja o que mudou, e atualize a extração junto com a fixture
+em `tests/fixtures/loom_embed.html`.
+
+Vale rodar `-m rede` antes de uma sessão longa de downloads, ou quando algo
+parar de funcionar sem motivo aparente.
+
+---
+
 ## 📸 Screenshots
 
 *![Dashboard no terminal](assets/image.png)*

@@ -273,6 +273,53 @@ Status:
 
 ---
 
+## ✅ FASE 2 — CONCLUÍDA (2026-07-24)
+
+| Tarefa | Resultado |
+|---|---|
+| 2.1 Fixtures | 4 arquivos reais, credenciais sanitizadas, 0 remanescentes |
+| 2.2 Testes de unidade | 39 testes, verdes, sem rede |
+| 2.3 Smoke ao vivo | 4 testes, verdes, `-m rede` |
+
+### A validação que importa: mutation test
+
+Uma suíte que não falha quando o código quebra não vale nada. Reverti o regex para a
+versão quebrada e rodei:
+
+```
+FAILED tests/test_extracao.py::test_extrai_url_do_stream
+FAILED tests/test_extracao.py::test_url_extraida_nao_tem_escape_de_json
+FAILED tests/test_extracao.py::test_nao_exige_o_nome_literal_playlist_ponto_m3u8
+FAILED tests/test_extracao.py::test_sobrevive_a_rename_do_arquivo_pelo_loom[playlist-multibitrate.m3u8]
+FAILED tests/test_extracao.py::test_sobrevive_a_rename_do_arquivo_pelo_loom[playlist-v2.m3u8]
+FAILED tests/test_extracao.py::test_sobrevive_a_rename_do_arquivo_pelo_loom[stream-principal.m3u8]
+FAILED tests/test_extracao.py::test_sobrevive_a_rename_do_arquivo_pelo_loom[qualquer-nome-que-o-loom-inventar.m3u8]
+7 failed, 32 passed, 4 deselected
+```
+
+Código restaurado via `git checkout` e suíte de volta a `39 passed`.
+**A rede de segurança está comprovadamente armada** — a Fase 3 pode começar.
+
+### Decisão sobre as fixtures
+
+As URLs do Loom carregam `Signature`, `Policy` e `Key-Pair-Id` — credenciais de acesso ao
+vídeo. Os **valores** foram substituídos por placeholders, preservando a **estrutura**, que
+é o que os testes parseiam. Verificado programaticamente: 0 credenciais remanescentes.
+Sem isso, publicar o repo vazaria acesso ao conteúdo.
+
+Consistência das fixtures com a realidade: 33 segmentos de vídeo + 42 de áudio = 75,
+exatamente o total medido no download real de 23/07.
+
+### Cobertura
+
+- `limpar_nome_arquivo` — caracteres proibidos no Windows, entidades HTML, vazios
+- `extrair_metadados` — título, URL, escape de JSON, página sem stream, erro de rede
+- **resiliência a rename** — 5 nomes diferentes de arquivo, incluindo o antigo
+- `processar_download` — maior BANDWIDTH, vídeo + áudio, 75 segmentos, playlists gravadas,
+  pulo por arquivo existente, arquivo truncado, master sem áudio
+
+---
+
 # FASE 2 — Rede de segurança (ANTES da reescrita)
 
 > **Por que antes:** reescrever a extração sem teste é reescrever no escuro. A Fase 2 é o
