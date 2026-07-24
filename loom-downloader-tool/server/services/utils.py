@@ -56,8 +56,11 @@ def extrair_metadados(url_loom):
         else:
             titulo_limpo = "sem_titulo"
             
-        # Busca a URL do stream m3u8 dentro do JSON da página
-        match_url = re.search(r'"url":"(https://[^"]+playlist\.m3u8[^"]+)"', conteudo_html)
+        # Busca a URL do stream m3u8 dentro do JSON da página.
+        # NÃO exigir o nome literal "playlist.m3u8": o Loom passou a servir
+        # "playlist-multibitrate.m3u8", e o regex antigo parou de casar (falha
+        # silenciosa -> url_m3u8 = None -> download nunca acontecia).
+        match_url = re.search(r'"url":"(https://[^"]+\.m3u8[^"]*)"', conteudo_html)
         
         url_m3u8 = None
         if match_url:

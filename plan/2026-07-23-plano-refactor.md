@@ -1,0 +1,364 @@
+# Plano de Refactor — 2026-07-23
+
+**Estado:** aguardando sinal verde. Nada executado.
+
+Decisões do usuário: Fase 1 = "descer" · Fase 3 = API + fallback · Fase 4 = via extensão.
+
+---
+
+## Medições que mudam o plano
+
+### 1. A API do Loom NÃO funciona como esperado
+
+```
+POST https://www.loom.com/api/campaigns/sessions/<ID>/transcoded-url  -> HTTP 204, 0 bytes
+GET  (mesma URL)                                                      -> HTTP 403 (CloudFront)
+```
+
+`204 No Content` significa "aceito, sem corpo" — o endpoint **não devolve a URL**. Ou ele
+exige CSRF/token de sessão que não temos, ou mudou de forma.
+
+**Consequência:** a perna "API" da opção escolhida não é implementável hoje sem engenharia
+reversa do front-end do Loom. Ver decisão pendente D1.
+
+### 2. O parse estrutural funciona — e cobre mais do que o esperado
+
+`window.__APOLLO_STATE__` está presente no HTML. Extraído **sem regex de URL**, usando
+`json.JSONDecoder().raw_decode()` (acha o início, deixa o parser JSON achar o fim):
+
+```
+__APOLLO_STATE__ no offset 6949 -> 9065 bytes, 5 chaves no topo
+nós com campo 'url' contendo .m3u8: 1  (exatamente um, sem ambiguidade)
+  __typename : CloudfrontSignedUrlPayload
+  caminho    : RegularUserVideo:<ID>.nullableRawCdnUrl({"acceptableMimes":["M3U8"],"password":null})
+```
+
+**Bônus:** o título também sai da mesma árvore — `RegularUserVideo.name` =
+`"Introdução ao Programa Gang e Dinâmica de Implementação"`. Ou seja, **os dois regex de
+`extrair_metadados` morrem de uma vez** (o do `<title>` e o da URL), substituídos por uma
+leitura estrutural só.
+
+16 `__typename` distintos na árvore. Ancorar em `CloudfrontSignedUrlPayload` é seguro:
+aparece exatamente 1×.
+
+### 3. O venv NÃO pode ser movido
+
+`venv/` fica em `hsl-lab/venv`. Um venv tem caminhos **absolutos** gravados em
+`pyvenv.cfg` e nos scripts de `Scripts/`. Mover a pasta quebra o venv silenciosamente.
+Na Fase 1 o venv **permanece onde está**; quem resolve isso é o script de setup.
+
+### 4. O .gitignore não precisa mudar
+
+Padrões sem âncora (`output/`, `venv/`, `hls-temp/`) casam em qualquer profundidade.
+Mover arquivos não afeta.
+
+---
+
+## Decisão pendente
+
+**D1 — a perna "API" da Fase 3.** Como medido, o endpoint devolve 204 vazio. Opções:
+- **(a)** Implementar só o parse estrutural do Apollo (recomendado) — já provado, resolve
+  o problema real, e é estritamente melhor que o regex de hoje.
+- **(b)** Investigar o front-end do Loom para descobrir o contrato real da API antes de
+  implementar. Custa tempo, sem garantia.
+- **(c)** Implementar (a) agora, deixando uma porta aberta para a API depois.
+
+---
+
+# FASE 1 — Reestruturação e setup
+
+### Tarefa 1.1 - Mover requirements.txt e README.md
+
+**Objetivo:** acabar com a contradição do README (manda `cd loom-downloader-tool` mas os
+arquivos estão fora).
+**Arquivo/Local Alvo:** `E:\...\hsl-lab\{requirements.txt,README.md}` →
+`E:\...\hsl-lab\loom-downloader-tool\`
+**Comando Exato:**
+```bash
+cd "E:/CURSOS/Programação/Projetos/loom-downloader/hsl-lab"
+git mv requirements.txt loom-downloader-tool/requirements.txt
+git mv README.md loom-downloader-tool/README.md
+```
+**Quando Executar:** primeiro passo, com a árvore de trabalho limpa.
+**Como Validar:** `git status` mostra 2 renomeações; `ls loom-downloader-tool/` lista os
+dois arquivos; `ls` na raiz não os lista mais.
+**Rollback:** `git reset --hard HEAD` (só se não houver outra mudança não commitada).
+**Risco:** Baixo — `git mv` preserva histórico.
+**Critério para Avançar:** ambos os arquivos existem no novo local e o git registrou o rename.
+
+Status:
+- [ ] feito
+- [ ] bloqueado
+
+---
+
+### Tarefa 1.2 - Verificar que nada quebrou
+
+**Objetivo:** provar que mover arquivos não afetou o runtime.
+**Arquivo/Local Alvo:** `loom-downloader-tool/`
+**Comando Exato:**
+```bash
+cd "E:/CURSOS/Programação/Projetos/loom-downloader/hsl-lab/loom-downloader-tool"
+../venv/Scripts/python.exe -c "import sys; sys.path.insert(0,'server'); import app; print('IMPORT OK')"
+```
+**Quando Executar:** logo após 1.1.
+**Como Validar:** imprime `IMPORT OK` sem traceback.
+**Rollback:** reverter 1.1.
+**Risco:** Baixo — nenhum código referencia `requirements.txt` ou `README.md`.
+**Critério para Avançar:** `IMPORT OK`.
+
+Status:
+- [ ] feito
+- [ ] bloqueado
+
+---
+
+### Tarefa 1.3 - Criar script de setup
+
+**Objetivo:** substituir os 5 passos manuais do README por um comando.
+**Arquivo/Local Alvo:** criar `loom-downloader-tool/setup.ps1`
+**O quê:** o script deve, de forma idempotente:
+1. verificar Python 3.10+ e **abortar com mensagem clara** se ausente;
+2. verificar `ffmpeg` no PATH e abortar com link de instalação se ausente
+   (mesma checagem de `app.py:22`, mas *antes* de instalar qualquer coisa);
+3. criar `venv/` **se não existir** — nunca sobrescrever um venv existente;
+4. instalar `requirements.txt`;
+5. imprimir as instruções de carregar a extensão no Chrome (isso não dá para automatizar)
+   e o comando para subir o servidor.
+**Quando Executar:** após 1.2.
+**Como Validar:** rodar em um clone limpo num diretório temporário e ver o servidor subir.
+Rodar 2× seguidas: a segunda não pode recriar o venv nem dar erro.
+**Rollback:** `git rm loom-downloader-tool/setup.ps1`.
+**Risco:** **Médio** — o passo 3 mexe com venv. Deve conter guarda explícita
+`if (-not (Test-Path venv))`. Nunca `Remove-Item venv`.
+**Critério para Avançar:** clone limpo sobe com um comando; rodar 2× é seguro.
+
+Status:
+- [ ] feito
+- [ ] bloqueado
+
+---
+
+### Tarefa 1.4 - Reescrever o README
+
+**Objetivo:** refletir a estrutura real e o setup de um comando.
+**Arquivo/Local Alvo:** `loom-downloader-tool/README.md`
+**O quê:** substituir a sequência de 5 passos por `.\setup.ps1`; documentar que `venv/`
+mora na raiz do repo (um nível acima) e por quê; manter a instrução da extensão.
+**Quando Executar:** após 1.3 estar validada.
+**Como Validar:** seguir o README do zero, em outra máquina ou pasta, sem consultar mais nada.
+**Rollback:** `git checkout loom-downloader-tool/README.md`.
+**Risco:** Baixo.
+**Critério para Avançar:** um terceiro conseguiria subir o projeto só com o README.
+
+Status:
+- [ ] feito
+- [ ] bloqueado
+
+---
+
+# FASE 2 — Rede de segurança (ANTES da reescrita)
+
+> **Por que antes:** reescrever a extração sem teste é reescrever no escuro. A Fase 2 é o
+> que torna a Fase 3 verificável.
+
+### Tarefa 2.1 - Congelar fixtures
+
+**Objetivo:** ter entrada real e estável para testar sem rede.
+**Arquivo/Local Alvo:** criar `loom-downloader-tool/tests/fixtures/`
+**O quê:** salvar (a) o HTML de embed do Loom já baixado, (b) o `master.m3u8`,
+(c) uma `mediaplaylist` de vídeo e uma de áudio.
+**Quando Executar:** início da Fase 2.
+**Como Validar:** os arquivos existem e contêm `__APOLLO_STATE__` / `#EXT-X-STREAM-INF`.
+**Rollback:** apagar o diretório.
+**Risco:** Baixo.
+**Critério para Avançar:** fixtures em disco, commitadas.
+
+Status:
+- [ ] feito
+- [ ] bloqueado
+
+---
+
+### Tarefa 2.2 - Testes de unidade sobre as fixtures
+
+**Objetivo:** travar o comportamento atual antes de mexer nele.
+**Arquivo/Local Alvo:** criar `loom-downloader-tool/tests/test_extracao.py` e
+`test_playlist.py`
+**O quê:** cobrir `limpar_nome_arquivo`, extração de título, extração da URL `.m3u8`,
+escolha do maior `BANDWIDTH`, separação vídeo/áudio. **Sem rede.**
+**Quando Executar:** após 2.1.
+**Como Validar:** `pytest -v` — saída literal, todos verdes.
+**Rollback:** apagar os arquivos de teste.
+**Risco:** Baixo.
+**Critério para Avançar:** suíte verde contra o código **atual**, ainda com regex.
+
+Status:
+- [ ] feito
+- [ ] bloqueado
+
+---
+
+### Tarefa 2.3 - Smoke test ao vivo (separado)
+
+**Objetivo:** **este é o teste que teria pego o bug do Loom.** Fixture não pega mudança de
+terceiro; só medição contra o site real pega.
+**Arquivo/Local Alvo:** criar `loom-downloader-tool/tests/test_smoke_ao_vivo.py`
+**O quê:** marcar com `@pytest.mark.rede` (excluído do `pytest` padrão). Bate no Loom real
+e afirma que uma URL `.m3u8` foi extraída. Rodar sob demanda: `pytest -m rede`.
+**Quando Executar:** após 2.2.
+**Como Validar:** `pytest -m rede -v` passa; `pytest -v` **não** o executa.
+**Rollback:** apagar o arquivo.
+**Risco:** Baixo — read-only contra o Loom.
+**Critério para Avançar:** os dois modos se comportam como descrito.
+
+Status:
+- [ ] feito
+- [ ] bloqueado
+
+---
+
+# FASE 3 — Extração por estrutura
+
+### Tarefa 3.1 - Extrair o Apollo state estruturalmente
+
+**Objetivo:** parar de depender do formato do texto.
+**Arquivo/Local Alvo:** `loom-downloader-tool/server/services/utils.py`
+**O quê:** função nova `_extrair_apollo_state(html)`: localiza `window.__APOLLO_STATE__` e
+usa `json.JSONDecoder().raw_decode()` para deixar o **parser JSON** achar o fim do objeto.
+Sem contar chaves, sem regex do corpo.
+**Quando Executar:** com a Fase 2 verde.
+**Como Validar:** contra a fixture, retorna dict com 5 chaves no topo.
+**Rollback:** `git checkout services/utils.py`.
+**Risco:** Baixo.
+**Critério para Avançar:** dict parseado a partir da fixture.
+
+Status:
+- [ ] feito
+- [ ] bloqueado
+
+---
+
+### Tarefa 3.2 - Achar a URL caminhando na árvore
+
+**Objetivo:** eliminar o regex que quebrou o projeto.
+**Arquivo/Local Alvo:** `loom-downloader-tool/server/services/utils.py`
+**O quê:** caminhar a árvore procurando o nó com `__typename == "CloudfrontSignedUrlPayload"`
+e ler `url`. Título vem de `RegularUserVideo.name` na mesma passada.
+**Manter o regex antigo como último fallback**, com log explícito quando usado — assim uma
+mudança futura degrada em vez de quebrar.
+**Quando Executar:** após 3.1.
+**Como Validar:** testes da Fase 2 verdes **sem alteração**; `pytest -m rede` verde.
+Prova extra: renomear `playlist-multibitrate.m3u8` na fixture para outra coisa e confirmar
+que a extração **continua funcionando** — é a prova de que a fragilidade morreu.
+**Rollback:** `git checkout services/utils.py`.
+**Risco:** **Médio** — coração do sistema.
+**Critério para Avançar:** suíte verde + o teste do rename passa.
+
+Status:
+- [ ] feito
+- [ ] bloqueado
+
+---
+
+### Tarefa 3.3 - Falha silenciosa nunca mais
+
+**Objetivo:** a pendência nº 1, que já custou duas horas hoje.
+**Arquivo/Local Alvo:** `utils.py`, `downloader.py`, `routes.py`
+**O quê:** trocar `except:` nus por `except Exception as e:` com log; logar quando a
+extração falhar e **por quê**; propagar o motivo até o dashboard em vez de só `'erro'`.
+**Quando Executar:** após 3.2.
+**Como Validar:** forçar uma URL inválida e confirmar que a causa aparece no terminal.
+**Rollback:** `git checkout` dos três arquivos.
+**Risco:** Baixo.
+**Critério para Avançar:** falha provocada produz mensagem legível.
+
+Status:
+- [ ] feito
+- [ ] bloqueado
+
+---
+
+### Tarefa 3.4 - Parsear o m3u8 sem regex
+
+**Objetivo:** o outro regex frágil, ainda não explodido (`downloader.py:85`).
+**Arquivo/Local Alvo:** `loom-downloader-tool/server/services/downloader.py`
+**O quê:** parser linha a linha do HLS (formato com gramática própria: uma linha
+`#EXT-X-STREAM-INF:` seguida da URI na linha seguinte), no lugar do `re.findall` com `.*\n`.
+**Quando Executar:** após 3.3.
+**Como Validar:** testes de playlist da Fase 2 verdes sem alteração.
+**Rollback:** `git checkout services/downloader.py`.
+**Risco:** Médio.
+**Critério para Avançar:** suíte verde + download real ainda funciona.
+
+Status:
+- [ ] feito
+- [ ] bloqueado
+
+---
+
+### Tarefa 3.5 - Matar a duplicação de PASTA_OUTPUT
+
+**Objetivo:** o `CLAUDE.md` avisa "mexeu num, mexa no outro" — isso é um bug esperando.
+**Arquivo/Local Alvo:** `downloader.py:11-14` e `converter.py:8-11`
+**O quê:** centralizar em `services/__init__.py` (que já define `PASTA_TEMP_RAIZ`) e
+importar nos dois. Atualizar o `CLAUDE.md` removendo o aviso.
+**Quando Executar:** após 3.4.
+**Como Validar:** `grep -rn "PASTA_OUTPUT" server/` mostra **uma** definição.
+**Rollback:** `git checkout`.
+**Risco:** Baixo.
+**Critério para Avançar:** definição única e download real funciona.
+
+Status:
+- [ ] feito
+- [ ] bloqueado
+
+---
+
+### Tarefa 3.6 - Ctrl+C precisa matar o servidor
+
+**Objetivo:** o zumbi das 21:44 custou meia hora de diagnóstico.
+**Arquivo/Local Alvo:** `server/app.py` e `server/dashboard.py`
+**O quê:** o `Live` do Rich provavelmente captura o `KeyboardInterrupt` antes do handler de
+`app.py:35`. **Diagnosticar primeiro**, depois consertar. Além disso: detectar porta 5000
+já ocupada no boot e abortar com mensagem clara em vez de morrer obscuramente.
+**Quando Executar:** após 3.5.
+**Como Validar:** subir, `Ctrl+C`, e confirmar com `Get-NetTCPConnection -LocalPort 5000`
+que **nada** sobrou. Subir duas vezes e ver a mensagem de porta ocupada.
+**Rollback:** `git checkout`.
+**Risco:** Médio — mexe no ciclo de vida do processo.
+**Critério para Avançar:** zero processo órfão após Ctrl+C.
+
+Status:
+- [ ] feito
+- [ ] bloqueado
+
+---
+
+# FASE 4 — Crawler de módulos (via extensão)
+
+> Desenho a fechar **depois** da Fase 3. O que já se sabe:
+>
+> - `max_workers=3` (`routes.py:24`) é **concorrência, não capacidade**. Enfileirar 200
+>   aulas funciona; processa 3 por vez. **Não precisa mexer.**
+> - A extensão já detecta o iframe do Loom e já lê comunidade/curso/aula do `document.title`
+>   corretamente (validado no navegador em 23/07).
+> - O desafio real é **enumerar as aulas** dentro da SPA do Skool sem quebrar a navegação.
+>   Precisa de exploração no navegador antes de virar microtarefa.
+>
+> Entregável previsto: botão "⬇ Baixar módulo inteiro" que percorre as aulas e faz um POST
+> por aula. Precisa de: rate limit entre POSTs, e feedback de progresso no dashboard.
+
+---
+
+## Checklist final (rodar ao término de todas as fases)
+
+- [ ] `pytest -v` verde
+- [ ] `pytest -m rede -v` verde
+- [ ] Setup em clone limpo sobe com um comando
+- [ ] Servidor sobe e o dashboard aparece
+- [ ] Botão da extensão aparece numa aula do Skool
+- [ ] Download real ponta a ponta → `.mp4` com vídeo **e** áudio no `ffprobe`
+- [ ] `Ctrl+C` não deixa processo órfão
+- [ ] `output/` intacta (268 MB preservados)
+- [ ] `git status` sem arquivo indesejado
