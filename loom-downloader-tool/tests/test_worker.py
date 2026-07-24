@@ -41,13 +41,18 @@ def test_aula_so_texto_grava_md_e_da_sucesso(output_isolado):
     assert item["status"] == "sucesso"
 
 
-def test_aula_so_texto_sem_conteudo_da_erro(output_isolado):
-    """Sem vídeo e sem texto não há o que salvar — status erro."""
+def test_aula_vazia_gera_md_placeholder(output_isolado):
+    """Aula sem vídeo e sem texto (placeholder do curso) não some: vira um .md
+    com o título e uma nota, e conta como sucesso."""
     item = _item(url="")
     routes.worker_download("", item["folder"], item["nome"], item, None, None)
 
-    assert item["status"] == "erro"
-    assert not any(output_isolado.rglob("*.md"))
+    md = output_isolado / "Com" / "Curso" / "Modulo" / "Aula 1.md"
+    assert md.exists()
+    conteudo = md.read_text(encoding="utf-8")
+    assert "# Aula 1" in conteudo
+    assert "não tinha vídeo nem texto" in conteudo
+    assert item["status"] == "sucesso"
 
 
 def test_aula_video_mais_texto(output_isolado, monkeypatch):

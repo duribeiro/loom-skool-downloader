@@ -157,11 +157,11 @@ function coletarAulasDoCurso() {
         const meta = unit.metadata || {};
         const videoLink = meta.videoLink || '';
         const ehLoom = /loom\.com\/(embed|share)\//.test(videoLink);
-        const temTexto = (meta.desc && meta.desc.length > 4) ||
-                         (meta.resources && meta.resources.length > 2);
 
-        // Pula aulas sem nada aproveitável (nem Loom, nem texto).
-        if (!ehLoom && !temTexto) continue;
+        // Inclui TODA aula do curso — inclusive as vazias (sem vídeo nem texto).
+        // O servidor grava um .md placeholder para elas, para que nenhuma aula
+        // suma sem aviso. Só aulas com vídeo de OUTRA plataforma (YouTube etc.)
+        // seguem sem o .mp4 — mas o texto/registro ainda vai.
 
         const { curso, modulos } = caminhoDaAula(unit, porId);
         const pasta = [comunidade, curso, ...modulos]

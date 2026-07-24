@@ -121,9 +121,17 @@ def test_markdown_completo():
 
 
 def test_markdown_so_com_video_retorna_none():
-    """Aula sem texto nem recursos não gera .md — não gravar arquivo vazio."""
+    """Aula com vídeo e sem texto não gera .md — não gravar arquivo redundante."""
     assert montar_markdown("Aula", "", "") is None
     assert montar_markdown("Aula", None, None) is None
+
+
+def test_markdown_vazio_com_permitir_vazio_gera_placeholder():
+    """Aula sem vídeo e sem texto: gera placeholder para não sumir do registro."""
+    md = montar_markdown("Intro", "", "", permitir_vazio=True)
+    assert md is not None
+    assert "# Intro" in md
+    assert "não tinha vídeo nem texto" in md
 
 
 def test_markdown_so_texto_sem_recursos():

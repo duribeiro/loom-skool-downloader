@@ -135,17 +135,26 @@ def converter_resources(resources_bruto):
     return "\n".join(linhas)
 
 
-def montar_markdown(titulo, desc_bruto, resources_bruto):
+NOTA_VAZIA = "_(Esta aula não tinha vídeo nem texto no Skool.)_"
+
+
+def montar_markdown(titulo, desc_bruto, resources_bruto, permitir_vazio=False):
     """Monta o .md final de uma aula: título + descrição + recursos.
 
-    Devolve None se não houver conteúdo textual nenhum (aula só de vídeo) — o
-    chamador não deve gravar arquivo vazio nesse caso.
+    - `permitir_vazio=False` (padrão, para aula com vídeo): devolve None quando
+      não há texto, para não gravar um .md redundante ao lado do .mp4.
+    - `permitir_vazio=True` (aula sem vídeo): sempre devolve um .md. Se não há
+      conteúdo, gera um placeholder com o título e uma nota — assim uma aula
+      vazia do curso fica registrada em vez de sumir sem aviso.
     """
     corpo_desc = converter_desc(desc_bruto)
     corpo_resources = converter_resources(resources_bruto)
 
     if not corpo_desc and not corpo_resources:
-        return None
+        if not permitir_vazio:
+            return None
+        cabecalho = f"# {titulo}".rstrip() if titulo else "# (aula sem título)"
+        return f"{cabecalho}\n\n{NOTA_VAZIA}\n"
 
     partes = [f"# {titulo}".rstrip()] if titulo else []
     if corpo_desc:
@@ -156,14 +165,17 @@ def montar_markdown(titulo, desc_bruto, resources_bruto):
     return "\n\n".join(partes).strip() + "\n"
 
 
-def salvar_aula_md(nome, pasta_rel, desc_bruto, resources_bruto):
+def salvar_aula_md(nome, pasta_rel, desc_bruto, resources_bruto, permitir_vazio=False):
     """
-    Grava o `.md` da aula ao lado de onde o vídeo fica, se houver texto.
+    Grava o `.md` da aula ao lado de onde o vídeo fica.
 
-    Devolve o caminho gravado, ou None se a aula não tinha texto nenhum (aí
-    nada é gravado — não deixamos .md vazio no disco).
+    Com `permitir_vazio=False` (aula com vídeo), só grava se houver texto — não
+    deixa .md redundante ao lado do .mp4. Com `permitir_vazio=True` (aula sem
+    vídeo), sempre grava, usando um placeholder quando a aula está vazia.
+
+    Devolve o caminho gravado, ou None se nada foi gravado.
     """
-    conteudo = montar_markdown(nome, desc_bruto, resources_bruto)
+    conteudo = montar_markdown(nome, desc_bruto, resources_bruto, permitir_vazio)
     if conteudo is None:
         return None
 

@@ -62,9 +62,12 @@ def worker_download(url, pasta_destino, nome_arquivo_sugerido, item_dashboard,
         else:
             item_dashboard['progresso'] += 1
 
-    # C. Gravar o texto da aula (independe do vídeo; aula só-texto também tem)
+    # C. Gravar o texto da aula (independe do vídeo; aula só-texto também tem).
+    # Sem vídeo, gravamos o .md mesmo vazio (placeholder) — assim uma aula do
+    # curso nunca é omitida em silêncio.
     try:
-        caminho_md = salvar_aula_md(nome_limpo, pasta_destino, desc, resources)
+        caminho_md = salvar_aula_md(nome_limpo, pasta_destino, desc, resources,
+                                    permitir_vazio=not url)
         if caminho_md:
             item_dashboard['tem_texto'] = True
     except Exception as erro:
