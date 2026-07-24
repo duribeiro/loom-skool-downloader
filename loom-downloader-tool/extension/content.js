@@ -122,6 +122,45 @@ function metaDe(no) {
     return null;
 }
 
+// O texto da aula ("desc") é uma string que começa com "[v2]" (rich-text do
+// Skool). Os recursos ("resources") são um JSON array de {title, link}.
+// Ancoramos a busca nesses invariantes MEDIDOS — não no nome/lugar do campo,
+// que varia. Assim o texto é capturado mesmo que o Skool o aninhe diferente.
+function pareceDesc(v) {
+    return typeof v === 'string' && v.startsWith('[v2]');
+}
+
+function pareceResources(v) {
+    if (typeof v !== 'string') return false;
+    const t = v.trim();
+    if (!t.startsWith('[')) return false;
+    try {
+        const arr = JSON.parse(t);
+        return Array.isArray(arr) && arr.length > 0 &&
+               arr.some(i => i && typeof i === 'object' && (i.link || i.title));
+    } catch (e) { return false; }
+}
+
+function buscarNaUnit(unit, aceita, profMax = 6) {
+    // Busca DENTRO da própria unit, sem descer para OUTRA unit (id diferente),
+    // para nunca pegar o texto de uma aula vizinha.
+    let achado = '';
+    (function anda(no, prof) {
+        if (achado || !no || typeof no !== 'object' || prof > profMax) return;
+        if (Array.isArray(no)) { for (const x of no) { anda(x, prof + 1); if (achado) return; } return; }
+        for (const k of Object.keys(no)) { if (aceita(no[k])) { achado = no[k]; return; } }
+        for (const k of Object.keys(no)) {
+            const v = no[k];
+            if (!v || typeof v !== 'object') continue;
+            // não cruzar a fronteira para outra unit do curso
+            if (v !== unit && typeof v.id === 'string' && v.unitType && v.id !== unit.id) continue;
+            anda(v, prof + 1);
+            if (achado) return;
+        }
+    })(unit, 0);
+    return achado;
+}
+
 function coletarUnits(raiz) {
     // Travessia genérica: junta todo objeto que seja um "unit" do Skool
     // (id + unitType + metadata), sem depender de como o Skool aninha.
@@ -184,9 +223,18 @@ function coletarAulasDoCurso() {
         const meta = metaDe(unit) || {};
         const videoLink = meta.videoLink || '';
         const ehLoom = /loom\.com\/(embed|share)\//.test(videoLink);
-        const desc = meta.desc || '';
-        const resources = meta.resources || '';
-        const temTexto = !!(desc || resources);
+
+        // Texto/recursos: tenta o campo direto; se vazio, busca dentro da unit
+        // por uma string "[v2]" (desc) ou um array de recursos. Ancorado nos
+        // invariantes medidos, não no nome do campo.
+        let desc = meta.desc || '';
+        if (!desc) desc = buscarNaUnit(unit, pareceDesc);
+        let resources = meta.resources || '';
+        if (!pareceResources(resources)) {
+            const r = buscarNaUnit(unit, pareceResources);
+            if (r) resources = r;
+        }
+        const temTexto = !!(desc || (resources && resources !== '[]'));
 
         // Inclui TODA aula do curso — inclusive as vazias (sem vídeo nem texto).
         // O servidor grava um .md placeholder para elas, para que nenhuma aula
