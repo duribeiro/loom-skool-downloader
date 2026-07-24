@@ -672,14 +672,22 @@ usuário.
 
 ---
 
-## Checklist final (rodar ao término de todas as fases)
+## Checklist final — MEDIDO 2026-07-24 (usuário fora; execução autônoma do agente)
 
-- [ ] `pytest -v` verde
-- [ ] `pytest -m rede -v` verde
-- [ ] Setup em clone limpo sobe com um comando
-- [ ] Servidor sobe e o dashboard aparece
-- [ ] Botão da extensão aparece numa aula do Skool
-- [ ] Download real ponta a ponta → `.mp4` com vídeo **e** áudio no `ffprobe`
-- [ ] `Ctrl+C` não deixa processo órfão
-- [ ] `output/` intacta (268 MB preservados)
-- [ ] `git status` sem arquivo indesejado
+Legenda: ✅ medido agora · 📄 validado antes (documentado nas fases) · ⏳ depende do usuário.
+
+- [x] ✅ `pytest -v` verde — **65 passed, 4 deselected** (rodado agora)
+- [x] ✅ `pytest -m rede -v` verde — **4 passed** (extração contra o Loom real ainda funciona)
+- [x] 📄 Setup em clone limpo sobe com um comando — validado na Fase 1 (não re-executado; não recriar venv com servidor ativo)
+- [x] ✅ Servidor sobe e o dashboard aparece — **o SEU servidor está rodando** (PID 314760, iniciado 06:46, venv correto). `GET /baixar` → **405** (Flask vivo e roteando). Não subi concorrente: a Fase 3.6 recusaria de qualquer forma.
+- [ ] ⏳ Botão da extensão aparece numa aula do Skool — **precisa de você** (recarregar a extensão e abrir uma aula no navegador). Não automatizável aqui.
+- [x] ✅ Download real ponta a ponta → `.mp4` com vídeo **e** áudio no `ffprobe` — validado em arquivo **já baixado** (`Mapeando seu tom de voz.mp4`, 471 s): stream 0 `h264`/video, stream 1 `aac`/audio. **Não disparei download novo** de ~350 MB — é ação de efeito colateral em massa e exige seu consentimento no momento (o "Baixar curso inteiro" nunca rodou de verdade: `output/` tem só 1 `.md` e nenhuma subpasta de Módulo).
+- [ ] ⏳ `Ctrl+C` não deixa processo órfão — **precisa de você** num terminal interativo (ressalva honesta da Fase 3.6: `CTRL_C_EVENT` entre processos não é reproduzível de forma automatizada e estável no Windows).
+- [x] ✅ `output/` intacta — **1.6 GB**, cresceu desde os 268 MB (downloads seus), preservada e ainda ignorada pelo git.
+- [x] ✅ `git status` sem arquivo indesejado — árvore limpa; branch `Dev` 12 commits à frente de `origin/Dev` (não empurrado — você não pediu push).
+
+### O que sobra, e por que eu não fiz sozinho
+
+1. **Clicar no botão da extensão** e **disparar o download real do curso** (~350 MB): efeito colateral irreversível/em massa. O próprio plano marca como "depende do usuário no momento". Sem seu sinal verde, não disparo.
+2. **Ctrl+C**: só você, no terminal onde o servidor roda, consegue provar. Depois de apertar, rode `Get-NetTCPConnection -LocalPort 5000` — se não sobrar nada, o item fecha.
+3. **Push da branch `Dev`**: 12 commits locais aguardam. Não empurrei porque publicar é ação externa e você não pediu.
