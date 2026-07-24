@@ -614,6 +614,36 @@ Commits `ebfa94b` (crawler + texto) e `2e8ad36` (aulas vazias).
 
 ---
 
+## Fase 4.1 — Aplicar de fato + aula de texto (2026-07-24, commit `5a72ae1`)
+
+Decisão do usuário (fora de casa, tudo autorizado): tirar o "modo teste" do botão
+**Baixar curso inteiro** e resolver aulas de texto que não baixavam.
+
+**Escolha via AskUserQuestion:** "Tirar o gate de 2 cliques". O dry-run de duplo clique
+virou **um clique com uma confirmação** (`confirm()`). CSS `.confirmar` removido (morto).
+
+**Aula de texto sumindo — causa e correção.** O filtro da coleta era `unitType === 'module'`
+(`content.js:155`). Isso **contradizia** a intenção documentada ("nenhuma aula omitida"):
+uma aula de texto com outro `unitType` (ex.: `page`) era descartada em silêncio — exatamente
+o sintoma relatado (dois `?md=` de texto no curso `38f1ee05`/BACKROOM.EXE não baixavam).
+Correção: entram TODAS as folhas (tudo que não seja container `course`/`set`); `metadata`
+como string JSON passou a ser tolerado; diagnóstico de `unitType` + colunas `tipo`/`texto`
+no `console.table`.
+
+**Medido, não afirmado.** Sem fixture do `__NEXT_DATA__` no repo (vive na sessão logada,
+bloqueado à automação). Então:
+- harness Node sintético: aula `page` + `metadata` string → agora coletadas (3 aulas, 2 com
+  texto), quando o filtro antigo pegaria só 1.
+- server-side `montar_markdown`: `desc`+`resources` → Markdown correto; aula vazia →
+  placeholder. 65 testes verdes.
+
+**Confirmação final ainda depende do usuário:** recarregar a extensão, clicar, e ler o
+`console.table` — a coluna `texto` mostra se os dois `?md=` saem com `texto=sim`. Se saírem
+`texto=—`, o `desc` mora noutro campo que não `metadata.desc` (próximo passo seria mapear
+onde, com o JSON real em mãos).
+
+---
+
 ## Microtarefas (referência do desenho — todas executadas acima)
 
 ### Tarefa 4.1 - Função que lê o __NEXT_DATA__ e monta a lista de aulas
