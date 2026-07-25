@@ -256,15 +256,68 @@ function coletarAulasDoCurso() {
             _temVideo: ehLoom,
             _temTexto: temTexto,
             _unitType: unit.unitType,
+            _id: unit.id,   // = o "md" da aula; usado para buscar o texto individual
         });
     }
     return aulas;
 }
 
-async function enfileirarCurso(aulas, aoProgredir) {
+// --- 1.6. TEXTO POR AULA (via endpoint de dados do Next.js do Skool) ---
+// O __NEXT_DATA__ só traz o `desc` da aula ABERTA. Para pegar o texto das
+// demais, buscamos o JSON de cada aula no mesmo endpoint que o Skool usa ao
+// trocar de aula: /_next/data/<buildId>/<group>/classroom/<course>.json?md=<id>
+// A extensão roda com a sessão do usuário (cookies), então o fetch é autorizado.
+
+function obterContexto() {
+    // buildId + group + course saem do próprio __NEXT_DATA__ (nada hardcoded).
+    const nd = obterNextData();
+    const q = (nd && nd.query) || {};
+    return { buildId: nd && nd.buildId, group: q.group, course: q.course };
+}
+
+function extrairTextoParaMd(pp, md) {
+    // No JSON buscado para md=X, a aula X é a "aberta" e carrega o desc completo.
+    // Atribui SEMPRE pelo id (id === md) para nunca misturar com aula vizinha.
+    if (!pp || !md) return { desc: '', resources: '' };
+    const porId = coletarUnits(pp.course || pp);
+    const unit = porId[md];
+    if (!unit) return { desc: '', resources: '' };
+    const meta = metaDe(unit) || {};
+    const desc = pareceDesc(meta.desc) ? meta.desc : (buscarNaUnit(unit, pareceDesc) || (meta.desc || ''));
+    const resources = pareceResources(meta.resources) ? meta.resources : (buscarNaUnit(unit, pareceResources) || '');
+    return { desc, resources };
+}
+
+async function buscarTextoDaAula(md, ctx) {
+    if (!md || !ctx || !ctx.buildId || !ctx.group || !ctx.course) return { desc: '', resources: '' };
+    const q = `md=${encodeURIComponent(md)}&group=${encodeURIComponent(ctx.group)}` +
+              `&course=${encodeURIComponent(ctx.course)}`;
+    const url = `${location.origin}/_next/data/${ctx.buildId}/${ctx.group}/classroom/${ctx.course}.json?${q}`;
+    try {
+        const r = await fetch(url, { credentials: 'include', headers: { 'x-nextjs-data': '1' } });
+        if (!r.ok) { console.warn(`[Loom] _next/data ${r.status} para md ${md}`); return { desc: '', resources: '' }; }
+        const json = await r.json();
+        const pp = json.pageProps || (json.props && json.props.pageProps);
+        return extrairTextoParaMd(pp, md);
+    } catch (e) {
+        console.warn(`[Loom] falha ao buscar texto da aula ${md}:`, e);
+        return { desc: '', resources: '' };
+    }
+}
+
+async function enfileirarCurso(aulas, ctx, aoProgredir) {
     // Rate limit entre POSTs: não floodar o servidor nem o CDN.
-    let enviadas = 0;
+    let enviadas = 0, comTexto = 0;
     for (const aula of aulas) {
+        // O desc só vem no __NEXT_DATA__ da aula aberta. Para as demais, busca
+        // individualmente aqui (mesma cadência do rate limit, sem flood).
+        if (!aula.desc && aula._id && ctx && ctx.buildId) {
+            const t = await buscarTextoDaAula(aula._id, ctx);
+            if (t.desc) aula.desc = t.desc;
+            if (t.resources && !pareceResources(aula.resources)) aula.resources = t.resources;
+        }
+        if (aula.desc || pareceResources(aula.resources)) comTexto++;
+
         try {
             await fetch(SERVIDOR, {
                 method: 'POST',
@@ -284,6 +337,7 @@ async function enfileirarCurso(aulas, aoProgredir) {
         if (aoProgredir) aoProgredir(enviadas, aulas.length);
         await new Promise(r => setTimeout(r, 400));  // respiro entre pedidos
     }
+    console.log(`[Loom] textos capturados: ${comTexto}/${aulas.length} aulas`);
     return enviadas;
 }
 
@@ -399,9 +453,11 @@ function criarBotaoCurso() {
             return;
         }
 
-        // Confirmado: dispara os POSTs.
+        // Confirmado: dispara os POSTs. Busca o texto de cada aula em paralelo
+        // com o enfileiramento (o desc só vem no JSON da aula aberta).
         btn.disabled = true;
-        const enviadas = await enfileirarCurso(aulas, (i, n) => {
+        const ctx = obterContexto();
+        const enviadas = await enfileirarCurso(aulas, ctx, (i, n) => {
             btn.innerText = `📡 Enfileirando ${i}/${n}...`;
         });
         btn.innerText = `⏳ ${enviadas} aulas na fila — veja o terminal`;
