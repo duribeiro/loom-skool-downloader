@@ -683,6 +683,10 @@ No `enfileirarCurso`, para cada aula sem `desc`, busca o JSON dela e atribui o t
 No fim, o console diz `textos capturados: N/22`. Se N ≈ nº de aulas com texto → resolvido.
 Se `N` for baixo e aparecerem `_next/data 4xx`, é auth/URL — reportar o status.
 
+**✅ VALIDADO AO VIVO (2026-07-25).** Usuário rodou no curso GANG.EXE: baixou os vídeos E os
+textos, inclusive as aulas só-texto, cada `.md` no lugar. Fetch autenticado ao `_next/data`
+funcionou. Em teste com um segundo curso (estrutura diferente) para confirmar robustez.
+
 ---
 
 ## Microtarefas (referência do desenho — todas executadas acima)
