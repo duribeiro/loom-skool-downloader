@@ -661,10 +661,27 @@ busca dentro da própria aula por essas FORMAS (não por nome de campo), sem cru
 para outra unit. Vale para aula com vídeo (grava `.md` ao lado do `.mp4`) e só-texto.
 Medido com harness Node em 4 aninhamentos; 65 testes verdes.
 
-**Ainda pende medir na página real:** se, mesmo assim, a coluna `texto` sair `—` para alguma
-aula, é sinal de que o `desc` daquela aula NÃO está na árvore `course` (Skool só faz SSR do
-`desc` da aula aberta, em `pageProps.selectedModule`) — aí o crawler não alcança de uma
-página só e seria preciso outra estratégia (navegar/append por aula). Só o clique real diz.
+## Fase 4.3 — Texto de TODAS as aulas via _next/data (2026-07-25, commit `afb6ce2`)
+
+**Medido na página real (H1 confirmada):** um walk no `__NEXT_DATA__` achou **1 só** `[v2]`
+em toda a página (duplicado no espelho `renderData`), no caminho
+`pp.course.children.N.children.M.course.metadata.desc` — a aula ABERTA. As outras 21 não
+estão. Por isso o crawler pegava texto de 2/22.
+
+**Endpoint medido** (DevTools → Network ao trocar de aula):
+```
+https://www.skool.com/_next/data/1784832199933/backroomexe-3259/classroom/38f1ee05.json?md=<ID>&group=backroomexe-3259&course=38f1ee05
+```
+`buildId`/`group`/`course` saem do `__NEXT_DATA__` (`nd.buildId`, `nd.query`) — nada hardcoded.
+
+**Implementado:** `obterContexto` + `buscarTextoDaAula(md, ctx)` + `extrairTextoParaMd(pp, md)`.
+No `enfileirarCurso`, para cada aula sem `desc`, busca o JSON dela e atribui o texto por
+`id === md` (nunca mistura com vizinha). Rate limit reaproveitado. Log final
+"textos capturados: N/22". Parsing provado em harness; **fetch ao vivo depende do clique**.
+
+**Como validar (usuário):** recarregar a extensão, clicar em "Baixar curso inteiro" → OK.
+No fim, o console diz `textos capturados: N/22`. Se N ≈ nº de aulas com texto → resolvido.
+Se `N` for baixo e aparecerem `_next/data 4xx`, é auth/URL — reportar o status.
 
 ---
 
