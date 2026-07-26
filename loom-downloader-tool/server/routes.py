@@ -13,6 +13,8 @@ from services import (
     processar_download,
     converter_final,
     salvar_aula_md,
+    baixar_youtube,
+    eh_url_youtube,
     PASTA_TEMP_RAIZ
 )
 
@@ -84,22 +86,28 @@ def worker_download(url, pasta_destino, nome_arquivo_sugerido, item_dashboard,
         item_dashboard['status'] = 'sucesso' if sucesso_operacao else 'erro'
         return
 
-    _, url_m3u8 = extrair_metadados(url)
+    if eh_url_youtube(url):
+        # YouTube: o yt-dlp resolve formato + fusão vídeo/áudio com ffmpeg.
+        # Não passa pelo HLS nem pelo converter — grava direto o .mp4 final.
+        video_ok = baixar_youtube(url, pasta_destino, nome_limpo, atualizar_progresso)
+    else:
+        # Loom (e afins via embed): extrai o .m3u8 e baixa o HLS.
+        _, url_m3u8 = extrair_metadados(url)
 
-    if url_m3u8:
-        download_ok = processar_download(
-            url_m3u8,
-            caminho_pasta_temp,
-            nome_limpo,
-            pasta_destino,
-            atualizar_progresso
-        )
+        if url_m3u8:
+            download_ok = processar_download(
+                url_m3u8,
+                caminho_pasta_temp,
+                nome_limpo,
+                pasta_destino,
+                atualizar_progresso
+            )
 
-        if download_ok:
-            item_dashboard['status'] = 'convertendo'
-            if converter_final(nome_limpo, pasta_destino, caminho_pasta_temp):
-                limpar_pasta(caminho_pasta_temp)
-                video_ok = True
+            if download_ok:
+                item_dashboard['status'] = 'convertendo'
+                if converter_final(nome_limpo, pasta_destino, caminho_pasta_temp):
+                    limpar_pasta(caminho_pasta_temp)
+                    video_ok = True
 
     # E. Finalização e Relatório
     if video_ok:

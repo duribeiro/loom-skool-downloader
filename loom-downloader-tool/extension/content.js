@@ -223,6 +223,8 @@ function coletarAulasDoCurso() {
         const meta = metaDe(unit) || {};
         const videoLink = meta.videoLink || '';
         const ehLoom = /loom\.com\/(embed|share)\//.test(videoLink);
+        const ehYoutube = /(youtube\.com|youtu\.be)/.test(videoLink);
+        const ehVideo = ehLoom || ehYoutube;   // o servidor roteia Loom vs YouTube
 
         // Texto/recursos: tenta o campo direto; se vazio, busca dentro da unit
         // por uma string "[v2]" (desc) ou um array de recursos. Ancorado nos
@@ -248,12 +250,12 @@ function coletarAulasDoCurso() {
             .join('/');
 
         aulas.push({
-            url: ehLoom ? videoLink : '',
+            url: ehVideo ? videoLink : '',
             folder: pasta,
             filename: limparTexto(meta.title || 'Aula sem titulo'),
             desc: desc,
             resources: resources,
-            _temVideo: ehLoom,
+            _temVideo: ehVideo,
             _temTexto: temTexto,
             _unitType: unit.unitType,
             _id: unit.id,   // = o "md" da aula; usado para buscar o texto individual

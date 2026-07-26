@@ -86,6 +86,39 @@ def test_aula_so_video_nao_grava_md(output_isolado, monkeypatch):
     assert item["status"] == "sucesso"
 
 
+def test_aula_youtube_roteia_para_ytdlp(output_isolado, monkeypatch):
+    """URL de YouTube vai pro baixar_youtube, NÃO pro caminho HLS do Loom."""
+    chamado = {"yt": False, "loom": False}
+    monkeypatch.setattr(routes, "baixar_youtube",
+                        lambda *a, **k: chamado.__setitem__("yt", True) or True)
+    monkeypatch.setattr(routes, "processar_download",
+                        lambda *a, **k: chamado.__setitem__("loom", True) or True)
+    monkeypatch.setattr(routes, "extrair_metadados", lambda url: ("t", "m3u8"))
+    monkeypatch.setattr(routes, "converter_final", lambda *a, **k: True)
+    monkeypatch.setattr(routes, "limpar_pasta", lambda *a, **k: None)
+
+    item = _item(url="https://www.youtube.com/watch?v=abc")
+    routes.worker_download(item["url"], item["folder"], item["nome"], item, None, None)
+
+    assert chamado["yt"] and not chamado["loom"]
+    assert item["status"] == "sucesso"
+
+
+def test_aula_loom_nao_vai_para_ytdlp(output_isolado, monkeypatch):
+    """URL do Loom NÃO deve cair no yt-dlp."""
+    monkeypatch.setattr(routes, "baixar_youtube",
+                        lambda *a, **k: pytest.fail("Loom não deve ir pro yt-dlp"))
+    monkeypatch.setattr(routes, "extrair_metadados", lambda url: ("t", "m3u8"))
+    monkeypatch.setattr(routes, "processar_download", lambda *a, **k: True)
+    monkeypatch.setattr(routes, "converter_final", lambda *a, **k: True)
+    monkeypatch.setattr(routes, "limpar_pasta", lambda *a, **k: None)
+
+    item = _item(url="https://www.loom.com/embed/abc")
+    routes.worker_download(item["url"], item["folder"], item["nome"], item, None, None)
+
+    assert item["status"] == "sucesso"
+
+
 def test_video_falha_status_erro(output_isolado, monkeypatch):
     """Se o texto grava mas o vídeo falha, o status reflete a falha do vídeo."""
     monkeypatch.setattr(routes, "extrair_metadados", lambda url: ("t", None))

@@ -71,7 +71,7 @@ Status:
 **Risco:** Baixo.
 
 Status:
-- [ ] feito
+- [x] feito (2026-07-26) — `yt-dlp>=2026.7.4`
 
 ### Tarefa A1.3 — Serviço `baixar_youtube` no servidor
 
@@ -86,7 +86,10 @@ reusa `limpar_nome_arquivo` e o mesmo `PASTA_OUTPUT` de `services/caminhos.py`. 
 **Risco:** Médio (novo caminho de execução).
 
 Status:
-- [ ] feito
+- [x] feito (2026-07-26) — `server/services/youtube.py`. Seletor `bv*+ba[ext=m4a]/...` +
+  `merge_output_format=mp4`. Smoke ao vivo (60s do vídeo do usuário): **h264+aac em .mp4**,
+  confirmado por ffprobe. Auto-review pegou bug de `%` no outtmpl → corrigido com nome
+  temporário + rename (também blinda colisão simultânea via uuid). 6 testes novos (mock).
 
 ### Tarefa A1.4 — Roteamento no worker + no crawler
 
@@ -100,7 +103,9 @@ regex para aceitar `youtube.com`/`youtu.be` e mandar a URL (o roteamento fica no
 **Risco:** Médio.
 
 Status:
-- [ ] feito
+- [x] feito (2026-07-26) — `routes.worker_download` roteia por `eh_url_youtube(url)`;
+  `content.js` libera `youtube.com`/`youtu.be` como vídeo. 2 testes de roteamento
+  (YouTube→yt-dlp, Loom não→yt-dlp). **81 testes verdes.**
 
 ## Fase A2 — Matar dependências externas
 
