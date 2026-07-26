@@ -55,7 +55,10 @@ cd "E:/CURSOS/Programação/Projetos/loom-downloader/hsl-lab/loom-downloader-too
 **Critério para Avançar:** `.mp4` com vídeo+áudio confirmado por ffprobe.
 
 Status:
-- [ ] feito
+- [x] **feito (2026-07-26)** — yt-dlp 2026.07.04. Baixados 60s de teste: ffprobe confirma
+  **vídeo (av1 1280×720) + áudio (opus)**, mux'ado. **Achado:** "melhor qualidade" deu
+  **av1+opus → .webm**, não .mp4. Decisão para A1.3: seletor preferir **h264+aac → .mp4**
+  (compatibilidade universal / padrão da ferramenta), com fallback av1/webm. Spike removido.
 - [ ] bloqueado
 
 ### Tarefa A1.2 — `requirements`: fixar yt-dlp
