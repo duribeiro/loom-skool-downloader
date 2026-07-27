@@ -130,10 +130,34 @@ Status:
   - **✅ VALIDADO AO VIVO (2026-07-26):** botão na página do YouTube e popup "colar link"
     baixaram com vídeo + áudio. (Curso Skool não re-testado nesta rodada, mas já rodava.)
 
-**Caso em aberto (2026-07-26):** vídeo dentro de um **post de comunidade** do Skool
-(`/{group}/{post-slug}`, ex.: `.../2307-mini-workshop-tesouro-escondido`) — NÃO é
-`/classroom/`, então nem o botão de curso nem o de aula aparecem. A investigar qual player
-o post usa (diagnóstico no console) para decidir o suporte.
+### Tarefa A1.6 — Vimeo privado em post de comunidade (2026-07-27, commit `ea1a4eb`)
+
+**Caso:** vídeo Vimeo dentro de um post (`/{group}/{post-slug}`) não baixava — não é
+`/classroom/` (sem botão) e o Vimeo é privado/restrito por domínio.
+
+**Medições (a chave de tudo):**
+- O `<video>` é um `blob:` (MediaSource) — não baixável direto.
+- O ID real do vídeo veio do `oembed.json` (`1212858408`); o `315212429` era o ID da **legenda**.
+- `vimeo.com/{id}` → **401**. `player.vimeo.com/video/{id}` + `--referer <página Skool>` → **funciona**
+  (título + formatos; download real de 30s = **h264 2360×1200 + aac** em .mp4, ffprobe ok).
+- O `playlist.json` do CDN (skyfire.vimeocdn) abre de qualquer IP dentro da janela do `pathsig`,
+  mas não precisei dele — o yt-dlp resolve tudo com a URL do player + referer.
+
+**Implementado:**
+- `services/ytdlp.py`: engine yt-dlp compartilhada (extraída do youtube.py), agora com
+  `referer` (http_headers). YouTube e Vimeo usam a mesma. `youtube.py` virou wrapper fino.
+- `services/vimeo.py`: `eh_url_vimeo`, `url_player_vimeo` (normaliza p/ `player.vimeo.com/video/{id}`),
+  `baixar_vimeo`/`titulo_do_vimeo` com referer.
+- `routes.py`: worker roteia Vimeo com referer; `/baixar` aceita campo `referer`.
+- `content.js`: `acharVimeoId` (iframes + **Performance API** — pega o request do player/oembed
+  mesmo sem iframe visível) + botão flutuante em posts; manda `url` do player + `referer=location.href`.
+- 96 testes verdes (+13). Smoke ao vivo do `titulo_do_vimeo` com referer: título real.
+
+**Depende de teste no navegador:** o botão aparecer no post e o download real ponta a ponta.
+
+**Limitação conhecida:** `acharVimeoId` usa `performance.getEntriesByType('resource')`, que é
+cumulativo — ao navegar (SPA) de um post Vimeo para outra página, o botão pode ficar com o id
+antigo. Aceitável para o fluxo "abrir post → clicar"; revisitar se incomodar.
 
 ## Fase A2 — Matar dependências externas
 
