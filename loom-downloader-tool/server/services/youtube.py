@@ -35,6 +35,21 @@ def eh_url_youtube(url):
     return "youtube.com" in u or "youtu.be" in u
 
 
+def titulo_do_youtube(url):
+    """Descobre o título do vídeo sem baixá-lo (metadados via yt-dlp).
+
+    Usado quando o pedido vem sem nome (ex.: link colado no popup). Em caso de
+    falha, devolve um nome genérico — nunca estoura, para não derrubar o worker.
+    """
+    try:
+        with yt_dlp.YoutubeDL({"quiet": True, "no_warnings": True, "skip_download": True}) as ydl:
+            info = ydl.extract_info(url, download=False)
+        return (info or {}).get("title") or "video_youtube"
+    except Exception as erro:
+        print(f"⚠️  Não consegui o título do YouTube ({type(erro).__name__}); usando genérico.")
+        return "video_youtube"
+
+
 def _normalizar_pasta_relativa(pasta_relativa):
     return pasta_relativa[1:] if pasta_relativa.startswith(os.sep) else pasta_relativa
 

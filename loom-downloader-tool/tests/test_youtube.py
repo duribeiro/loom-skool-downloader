@@ -17,9 +17,10 @@ def output_isolado(tmp_path, monkeypatch):
     return tmp_path
 
 
-def _instalar_ydl(monkeypatch, *, cria=True, erro=None):
+def _instalar_ydl(monkeypatch, *, cria=True, erro=None, titulo="Título Teste"):
     """Substitui yt_dlp.YoutubeDL por um fake que, ao 'baixar', cria o .mp4
-    esperado a partir do outtmpl (ou levanta `erro`, ou não cria nada)."""
+    esperado a partir do outtmpl (ou levanta `erro`, ou não cria nada), e ao
+    `extract_info` devolve o título (ou levanta `erro`)."""
     class FakeYDL:
         def __init__(self, opcoes):
             self.opcoes = opcoes
@@ -29,6 +30,11 @@ def _instalar_ydl(monkeypatch, *, cria=True, erro=None):
 
         def __exit__(self, *a):
             return False
+
+        def extract_info(self, url, download=False):
+            if erro:
+                raise erro
+            return {"title": titulo}
 
         def download(self, urls):
             if erro:
@@ -102,6 +108,16 @@ def test_nome_com_caracteres_proibidos_e_limpo(output_isolado, monkeypatch):
     assert ok is True
     # ':', '?' e '"' removidos por limpar_nome_arquivo
     assert (output_isolado / "Com" / "Curso" / "Aula 1 x.mp4").exists()
+
+
+def test_titulo_do_youtube(monkeypatch):
+    _instalar_ydl(monkeypatch, titulo="Como usar n8n")
+    assert mod_yt.titulo_do_youtube("https://youtu.be/abc") == "Como usar n8n"
+
+
+def test_titulo_do_youtube_com_erro_devolve_generico(monkeypatch):
+    _instalar_ydl(monkeypatch, erro=RuntimeError("sem rede"))
+    assert mod_yt.titulo_do_youtube("https://youtu.be/abc") == "video_youtube"
 
 
 def test_titulo_com_porcento_nao_quebra(output_isolado, monkeypatch):

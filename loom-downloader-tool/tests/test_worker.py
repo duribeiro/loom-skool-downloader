@@ -104,6 +104,25 @@ def test_aula_youtube_roteia_para_ytdlp(output_isolado, monkeypatch):
     assert item["status"] == "sucesso"
 
 
+def test_youtube_sem_nome_usa_titulo_ytdlp_nao_loom(output_isolado, monkeypatch):
+    """Link de YouTube sem nome (colado no popup): o título vem do yt-dlp,
+    NUNCA do extrator do Loom."""
+    chamado = {"titulo": False, "loom": False}
+    monkeypatch.setattr(routes, "titulo_do_youtube",
+                        lambda url: chamado.__setitem__("titulo", True) or "Meu Video")
+    monkeypatch.setattr(routes, "extrair_metadados",
+                        lambda url: chamado.__setitem__("loom", True) or ("x", "m3u8"))
+    monkeypatch.setattr(routes, "baixar_youtube", lambda *a, **k: True)
+    monkeypatch.setattr(routes, "limpar_pasta", lambda *a, **k: None)
+
+    item = _item(url="https://youtu.be/abc")
+    routes.worker_download(item["url"], item["folder"], "", item, None, None)
+
+    assert chamado["titulo"] and not chamado["loom"]
+    assert item["nome"] == "Meu Video"
+    assert item["status"] == "sucesso"
+
+
 def test_aula_loom_nao_vai_para_ytdlp(output_isolado, monkeypatch):
     """URL do Loom NÃO deve cair no yt-dlp."""
     monkeypatch.setattr(routes, "baixar_youtube",

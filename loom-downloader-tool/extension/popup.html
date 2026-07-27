@@ -1,0 +1,32 @@
+<!DOCTYPE html>
+<html lang="pt-br">
+<head>
+  <meta charset="utf-8">
+  <style>
+    body { width: 300px; margin: 0; padding: 16px; font: 14px system-ui, sans-serif;
+           background: #1e1e2e; color: #eee; }
+    h3 { margin: 0 0 12px; font-size: 15px; }
+    label { display: block; font-size: 12px; color: #aaa; margin: 10px 0 4px; }
+    input { width: 100%; box-sizing: border-box; padding: 8px; border-radius: 6px;
+            border: 1px solid #444; background: #2a2a3c; color: #eee; font-size: 13px; }
+    button { width: 100%; margin-top: 12px; padding: 10px; border: none; border-radius: 8px;
+             background: #6c5ce7; color: #fff; font-weight: 600; font-size: 14px; cursor: pointer; }
+    button:disabled { opacity: 0.6; cursor: default; }
+    #status { margin-top: 10px; font-size: 12px; min-height: 16px; }
+  </style>
+</head>
+<body>
+  <h3>⬇ Baixar vídeo do YouTube</h3>
+
+  <label for="url">Link do vídeo</label>
+  <input id="url" type="text" placeholder="https://www.youtube.com/watch?v=...">
+
+  <label for="folder">Pasta (dentro de output/)</label>
+  <input id="folder" type="text" value="YouTube">
+
+  <button id="baixar">Baixar</button>
+  <div id="status"></div>
+
+  <script src="popup.js"></script>
+</body>
+</html>

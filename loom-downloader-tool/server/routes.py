@@ -15,6 +15,7 @@ from services import (
     salvar_aula_md,
     baixar_youtube,
     eh_url_youtube,
+    titulo_do_youtube,
     PASTA_TEMP_RAIZ
 )
 
@@ -44,10 +45,15 @@ def worker_download(url, pasta_destino, nome_arquivo_sugerido, item_dashboard,
     item_dashboard['status'] = 'baixando'
 
     # A. Resolver o Nome do Arquivo
-    # Se a extensão não mandou nome, tentamos pegar do título da página (fallback)
+    # Se o pedido não trouxe nome (ex.: link colado no popup), descobrimos o título.
+    # YouTube -> yt-dlp; Loom/embed -> extrator do Loom. Rotear aqui evita que uma
+    # URL de YouTube caia no extrator do Loom e volte lixo.
     if not nome_arquivo_sugerido and url:
-        titulo_extraido, _ = extrair_metadados(url)
-        nome_arquivo_sugerido = titulo_extraido
+        if eh_url_youtube(url):
+            nome_arquivo_sugerido = titulo_do_youtube(url)
+        else:
+            titulo_extraido, _ = extrair_metadados(url)
+            nome_arquivo_sugerido = titulo_extraido
 
     # Limpa caracteres proibidos (ex: remove "?", "/", ":")
     nome_limpo = limpar_nome_arquivo(nome_arquivo_sugerido)

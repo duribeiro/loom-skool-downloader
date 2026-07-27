@@ -107,6 +107,28 @@ Status:
   `content.js` libera `youtube.com`/`youtu.be` como vídeo. 2 testes de roteamento
   (YouTube→yt-dlp, Loom não→yt-dlp). **81 testes verdes.**
 
+### Tarefa A1.5 — Entradas diretas de YouTube (botão na página + popup)
+
+**Por quê:** o uso mais comum de download de YouTube é navegando no próprio YouTube ou
+colando um link — não via Skool (decisão do usuário 2026-07-26).
+
+Status:
+- [x] feito (2026-07-26)
+  - **Botão na página do YouTube** (`extension/youtube.js`, content script novo em
+    `youtube.com/watch`): pega a URL limpa + título do `document.title`, POST `/baixar`
+    com `folder="YouTube"`. Ciente da navegação SPA.
+  - **Popup "colar link"** (`extension/popup.html` + `popup.js`, `action` no manifest):
+    cola a URL, POST com `filename=""`; o servidor resolve o título via
+    `titulo_do_youtube` (yt-dlp `extract_info`). Campo de pasta opcional (default `YouTube`).
+  - **Servidor:** `titulo_do_youtube(url)` novo; `worker_download` (seção A) roteia a
+    descoberta de título por tipo de URL — YouTube→yt-dlp, resto→Loom (uma URL de YouTube
+    nunca cai no extrator do Loom).
+  - **manifest v2.6:** `host_permissions` youtube/youtu.be/localhost (sem porta — match
+    pattern do Chrome não aceita porta; auto-review pegou `localhost:5000` inválido → `localhost`).
+  - Medido: manifest JSON válido; `titulo_do_youtube` ao vivo devolve o título real.
+    84 testes verdes (+3). Fluxo end-to-end na UI depende de teste no navegador (servidor
+    reiniciado + extensão recarregada).
+
 ## Fase A2 — Matar dependências externas
 
 **Objetivo:** o usuário nunca instala Python nem põe ffmpeg no PATH.
