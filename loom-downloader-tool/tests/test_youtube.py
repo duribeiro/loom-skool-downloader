@@ -8,12 +8,13 @@ import os
 import pytest
 
 from services import youtube as mod_yt
+from services import ytdlp as mod_engine   # onde vive o yt_dlp e PASTA_OUTPUT
 
 
 @pytest.fixture
 def output_isolado(tmp_path, monkeypatch):
-    """Aponta PASTA_OUTPUT do módulo youtube para um destino temporário."""
-    monkeypatch.setattr(mod_yt, "PASTA_OUTPUT", str(tmp_path))
+    """Aponta PASTA_OUTPUT da engine para um destino temporário."""
+    monkeypatch.setattr(mod_engine, "PASTA_OUTPUT", str(tmp_path))
     return tmp_path
 
 
@@ -44,7 +45,7 @@ def _instalar_ydl(monkeypatch, *, cria=True, erro=None, titulo="Título Teste"):
                 with open(caminho, "wb") as f:
                     f.write(b"0" * 200_000)  # acima do tamanho mínimo
 
-    monkeypatch.setattr(mod_yt.yt_dlp, "YoutubeDL", FakeYDL)
+    monkeypatch.setattr(mod_engine.yt_dlp, "YoutubeDL", FakeYDL)
 
 
 # --- reconhecimento de URL -----------------------------------------------------
@@ -117,7 +118,7 @@ def test_titulo_do_youtube(monkeypatch):
 
 def test_titulo_do_youtube_com_erro_devolve_generico(monkeypatch):
     _instalar_ydl(monkeypatch, erro=RuntimeError("sem rede"))
-    assert mod_yt.titulo_do_youtube("https://youtu.be/abc") == "video_youtube"
+    assert mod_yt.titulo_do_youtube("https://youtu.be/abc") == "video"
 
 
 def test_titulo_com_porcento_nao_quebra(output_isolado, monkeypatch):

@@ -123,6 +123,24 @@ def test_youtube_sem_nome_usa_titulo_ytdlp_nao_loom(output_isolado, monkeypatch)
     assert item["status"] == "sucesso"
 
 
+def test_aula_vimeo_roteia_com_referer(output_isolado, monkeypatch):
+    """URL de Vimeo vai pro baixar_vimeo, levando o referer do pedido."""
+    capturado = {}
+    monkeypatch.setattr(routes, "baixar_vimeo",
+                        lambda url, pasta, nome, referer, cb: capturado.update(url=url, referer=referer) or True)
+    monkeypatch.setattr(routes, "baixar_youtube",
+                        lambda *a, **k: pytest.fail("Vimeo não deve ir pro youtube"))
+    monkeypatch.setattr(routes, "limpar_pasta", lambda *a, **k: None)
+
+    item = _item(url="https://player.vimeo.com/video/1212858408")
+    routes.worker_download(item["url"], item["folder"], item["nome"], item,
+                           None, None, "https://www.skool.com/x/post")
+
+    assert capturado["url"] == "https://player.vimeo.com/video/1212858408"
+    assert capturado["referer"] == "https://www.skool.com/x/post"
+    assert item["status"] == "sucesso"
+
+
 def test_aula_loom_nao_vai_para_ytdlp(output_isolado, monkeypatch):
     """URL do Loom NÃO deve cair no yt-dlp."""
     monkeypatch.setattr(routes, "baixar_youtube",

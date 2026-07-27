@@ -470,6 +470,67 @@ function criarBotaoCurso() {
     };
 }
 
+// --- 2.6. BOTÃO DE VÍDEO VIMEO (posts de comunidade) ---
+// O player do Vimeo é um blob (MediaSource) — não dá pra baixar direto. Mas o
+// servidor baixa via yt-dlp SE receber a URL do player + o Referer da página.
+// Aqui a extensão descobre o id do vídeo e mostra o botão; o Referer = location.href.
+
+function acharVimeoId() {
+    // Junta candidatos: src dos iframes + tudo que a página já requisitou
+    // (Performance API pega o request do player e o do oembed, mesmo sem iframe visível).
+    const fontes = [];
+    for (const f of document.querySelectorAll('iframe')) {
+        if (f.src) fontes.push(f.src);
+    }
+    try {
+        for (const e of performance.getEntriesByType('resource')) fontes.push(e.name);
+    } catch (e) { /* Performance pode não estar disponível */ }
+
+    for (const s of fontes) {
+        // player.vimeo.com/video/12345  ou  ...oembed.json?url=...vimeo.com%2F12345
+        const m = s.match(/player\.vimeo\.com\/video\/(\d+)/) ||
+                  s.match(/vimeo\.com(?:%2F|\/)(\d{6,})/);
+        if (m) return m[1];
+    }
+    return null;
+}
+
+function criarBotaoVimeo() {
+    if (document.querySelector('.botao-vimeo')) return;   // já existe
+    const id = acharVimeoId();
+    if (!id) return;
+
+    const btn = document.createElement('button');
+    btn.className = 'botao-vimeo';
+    btn.innerText = '⬇ Baixar vídeo (Vimeo)';
+    document.body.appendChild(btn);
+
+    btn.onclick = async () => {
+        if (btn.disabled) return;
+        btn.disabled = true;
+        btn.innerText = '📡 Enviando...';
+        const dados = obterDadosDaPagina();   // mesma lógica de pasta/nome do botão de aula
+        try {
+            const resp = await fetch(SERVIDOR, {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({
+                    url: `https://player.vimeo.com/video/${id}`,
+                    folder: dados.folder,
+                    filename: dados.filename,
+                    referer: location.href,   // libera o Vimeo restrito por domínio
+                }),
+            });
+            await resp.json();
+            btn.innerText = '⏳ Na fila';
+        } catch (e) {
+            console.error('[Vimeo] servidor offline?', e);
+            btn.innerText = '❌ Servidor offline?';
+        }
+        setTimeout(() => { btn.disabled = false; btn.innerText = '⬇ Baixar vídeo (Vimeo)'; }, 4000);
+    };
+}
+
 // --- 3. OBSERVADORES (O VIGIA) ---
 
 function iniciarObservador() {
@@ -487,6 +548,8 @@ function iniciarObservador() {
         });
         // Botão de curso inteiro (aparece em qualquer aula do classroom).
         criarBotaoCurso();
+        // Botão de vídeo Vimeo (posts de comunidade e afins).
+        criarBotaoVimeo();
     });
     
     // Começa a vigiar o corpo da página
@@ -496,6 +559,7 @@ function iniciarObservador() {
 // Inicia o processo
 iniciarObservador();
 criarBotaoCurso();
+criarBotaoVimeo();
 
 // Detecção de Navegação em SPA (Single Page Application)
 // Sites modernos não recarregam a página ao mudar de aula, então vigiamos a URL.

@@ -16,6 +16,9 @@ from services import (
     baixar_youtube,
     eh_url_youtube,
     titulo_do_youtube,
+    baixar_vimeo,
+    eh_url_vimeo,
+    titulo_do_vimeo,
     PASTA_TEMP_RAIZ
 )
 
@@ -30,7 +33,7 @@ executor = ThreadPoolExecutor(max_workers=3)
 # --- 1. A LÓGICA DO TRABALHADOR (WORKER) ---
 # Esta função roda em "segundo plano" (background) para não travar o servidor.
 def worker_download(url, pasta_destino, nome_arquivo_sugerido, item_dashboard,
-                    desc=None, resources=None):
+                    desc=None, resources=None, referer=None):
     """
     Executa o ciclo completo de vida de uma aula:
     Preparar -> (baixar vídeo) -> (converter) -> (gravar texto) -> Limpar
@@ -51,6 +54,8 @@ def worker_download(url, pasta_destino, nome_arquivo_sugerido, item_dashboard,
     if not nome_arquivo_sugerido and url:
         if eh_url_youtube(url):
             nome_arquivo_sugerido = titulo_do_youtube(url)
+        elif eh_url_vimeo(url):
+            nome_arquivo_sugerido = titulo_do_vimeo(url, referer)
         else:
             titulo_extraido, _ = extrair_metadados(url)
             nome_arquivo_sugerido = titulo_extraido
@@ -96,6 +101,10 @@ def worker_download(url, pasta_destino, nome_arquivo_sugerido, item_dashboard,
         # YouTube: o yt-dlp resolve formato + fusão vídeo/áudio com ffmpeg.
         # Não passa pelo HLS nem pelo converter — grava direto o .mp4 final.
         video_ok = baixar_youtube(url, pasta_destino, nome_limpo, atualizar_progresso)
+    elif eh_url_vimeo(url):
+        # Vimeo (privado no Skool): mesmo motor do YouTube, mas com o Referer da
+        # página — é o que libera o vídeo restrito por domínio.
+        video_ok = baixar_vimeo(url, pasta_destino, nome_limpo, referer, atualizar_progresso)
     else:
         # Loom (e afins via embed): extrai o .m3u8 e baixa o HLS.
         _, url_m3u8 = extrair_metadados(url)
@@ -156,7 +165,8 @@ def rota_receber_pedido():
         novo_item_dashboard['nome'],
         novo_item_dashboard,
         dados_request.get('desc'),
-        dados_request.get('resources')
+        dados_request.get('resources'),
+        dados_request.get('referer')
     )
 
     return jsonify({"status": "ok", "mensagem": "Adicionado à fila"})
