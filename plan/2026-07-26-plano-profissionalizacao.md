@@ -126,8 +126,14 @@ Status:
   - **manifest v2.6:** `host_permissions` youtube/youtu.be/localhost (sem porta — match
     pattern do Chrome não aceita porta; auto-review pegou `localhost:5000` inválido → `localhost`).
   - Medido: manifest JSON válido; `titulo_do_youtube` ao vivo devolve o título real.
-    84 testes verdes (+3). Fluxo end-to-end na UI depende de teste no navegador (servidor
-    reiniciado + extensão recarregada).
+    84 testes verdes (+3).
+  - **✅ VALIDADO AO VIVO (2026-07-26):** botão na página do YouTube e popup "colar link"
+    baixaram com vídeo + áudio. (Curso Skool não re-testado nesta rodada, mas já rodava.)
+
+**Caso em aberto (2026-07-26):** vídeo dentro de um **post de comunidade** do Skool
+(`/{group}/{post-slug}`, ex.: `.../2307-mini-workshop-tesouro-escondido`) — NÃO é
+`/classroom/`, então nem o botão de curso nem o de aula aparecem. A investigar qual player
+o post usa (diagnóstico no console) para decidir o suporte.
 
 ## Fase A2 — Matar dependências externas
 
