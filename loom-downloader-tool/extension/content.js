@@ -1,6 +1,7 @@
 // --- CONFIGURAÇÃO ---
 let observadorDeMudancas = null;
 let ultimaUrlRegistrada = "";
+let enfileirandoEmAndamento = false;   // trava o beforeunload enquanto envia o curso
 
 // --- 1. FUNÇÕES AUXILIARES ---
 
@@ -192,9 +193,60 @@ function caminhoDaAula(unit, porId) {
     return { curso, modulos };
 }
 
-function coletarAulasDoCurso() {
+function slugsDaUrl() {
+    // Na rota /[group]/classroom/[course], os slugs vêm direto do caminho ATUAL.
+    // Isso reflete a aula/curso na tela AGORA, mesmo após navegação SPA — ao
+    // contrário do __NEXT_DATA__, que fica preso ao curso do primeiro load.
+    const partes = location.pathname.split('/');
+    return { group: partes[1] || '', course: partes[3] || '' };
+}
+
+async function obterPagePropsDoCurso() {
+    // BUG DA NAVEGAÇÃO SPA: o __NEXT_DATA__ é o SSR do PRIMEIRO carregamento e não
+    // se atualiza quando o Skool troca de curso sem recarregar. Ler dele enfileirava
+    // o curso ANTIGO (só um F5 corrigia). Aqui buscamos o JSON do curso ATUAL (pela
+    // URL) no mesmo endpoint que o Skool usa internamente — o mesmo já usado para o
+    // texto por aula, então roda com a sessão do usuário e é comprovadamente autorizado.
     const nd = obterNextData();
-    const pp = nd && nd.props && nd.props.pageProps;
+    const buildId = nd && nd.buildId;
+    const { group, course } = slugsDaUrl();
+    if (buildId && group && course) {
+        // Inclui o md atual da URL quando houver: deixa o request idêntico ao que o
+        // Skool faz ao abrir a aula (o mesmo já comprovado em buscarTextoDaAula).
+        // A árvore de aulas não depende do md — ele só marca o módulo selecionado.
+        const mdAtual = new URLSearchParams(location.search).get('md');
+        let q = `group=${encodeURIComponent(group)}&course=${encodeURIComponent(course)}`;
+        if (mdAtual) q += `&md=${encodeURIComponent(mdAtual)}`;
+        const url = `${location.origin}/_next/data/${buildId}/${group}/classroom/${course}.json?${q}`;
+        try {
+            const r = await fetch(url, { credentials: 'include', headers: { 'x-nextjs-data': '1' } });
+            if (r.ok) {
+                const json = await r.json();
+                const pp = json.pageProps || (json.props && json.props.pageProps);
+                if (pp && pp.course) return pp;
+                console.warn('[Loom] JSON fresco do curso sem pageProps.course; tentando cache local.');
+            } else {
+                console.warn(`[Loom] _next/data ${r.status} ao buscar curso atual; tentando cache local.`);
+            }
+        } catch (e) {
+            console.warn('[Loom] falha ao buscar curso fresco; tentando cache local:', e);
+        }
+    }
+    // Fallback: só confia no __NEXT_DATA__ se ele for COMPROVADAMENTE do curso ATUAL
+    // (o slug `name` bate com o da URL). Se não bater — ou não houver slug na URL — o
+    // cache está velho (navegação SPA para outro curso): enfileirá-lo mandaria o curso
+    // ERRADO, que é justamente o bug que esta função corrige. Nesse caso, abortamos.
+    const ppLocal = nd && nd.props && nd.props.pageProps;
+    const nomeLocal = ppLocal && ppLocal.course && ppLocal.course.course && ppLocal.course.course.name;
+    if (course && ppLocal && ppLocal.course && nomeLocal === course) {
+        return ppLocal;
+    }
+    console.warn('[Loom] Sem dados frescos do curso e cache desatualizado — recarregue a página (F5).');
+    return null;
+}
+
+async function coletarAulasDoCurso() {
+    const pp = await obterPagePropsDoCurso();
     if (!pp || !pp.course) {
         console.warn('[Loom] Não achei os dados do curso nesta página.');
         return [];
@@ -271,10 +323,12 @@ function coletarAulasDoCurso() {
 // A extensão roda com a sessão do usuário (cookies), então o fetch é autorizado.
 
 function obterContexto() {
-    // buildId + group + course saem do próprio __NEXT_DATA__ (nada hardcoded).
+    // buildId sai do __NEXT_DATA__ (estável em todo o app, não muda entre cursos).
+    // group/course vêm da URL ATUAL — não do nd.query, que fica preso ao primeiro
+    // load e apontava para o curso ERRADO após navegação SPA.
     const nd = obterNextData();
-    const q = (nd && nd.query) || {};
-    return { buildId: nd && nd.buildId, group: q.group, course: q.course };
+    const { group, course } = slugsDaUrl();
+    return { buildId: nd && nd.buildId, group, course };
 }
 
 function extrairTextoParaMd(pp, md) {
@@ -307,19 +361,55 @@ async function buscarTextoDaAula(md, ctx) {
     }
 }
 
+// Executa `fn` sobre `itens` com no máximo `limite` em voo ao mesmo tempo.
+// A concorrência limitada é o "respiro": rápida o bastante para fechar o curso
+// inteiro em ~1-2s, sem disparar N requests de uma vez contra o Skool/servidor.
+async function mapConcorrente(itens, limite, fn) {
+    let i = 0;
+    const trabalhadores = [];
+    for (let w = 0; w < Math.min(limite, itens.length); w++) {
+        trabalhadores.push((async () => {
+            while (i < itens.length) {
+                const idx = i++;
+                await fn(itens[idx], idx);
+            }
+        })());
+    }
+    await Promise.all(trabalhadores);
+}
+
 async function enfileirarCurso(aulas, ctx, aoProgredir) {
-    // Rate limit entre POSTs: não floodar o servidor nem o CDN.
-    let enviadas = 0, comTexto = 0;
-    for (const aula of aulas) {
-        // O desc só vem no __NEXT_DATA__ da aula aberta. Para as demais, busca
-        // individualmente aqui (mesma cadência do rate limit, sem flood).
+    // BUG DO ENFILEIRAMENTO PERDIDO: antes isto era um loop SEQUENCIAL com 400ms de
+    // espera por aula. Um curso grande levava dezenas de segundos e, se a página
+    // recarregasse ou navegasse no meio, as aulas ainda não enviadas eram PERDIDAS —
+    // o loop morria junto com o content script. Agora capturamos os textos e
+    // disparamos os POSTs com concorrência limitada, fechando tudo em poucos segundos.
+    // Combinado com o guarda `beforeunload`, um reload deixa de perder aulas.
+    const n = aulas.length;
+    let enviadas = 0, textos = 0, comTexto = 0;
+
+    // Fase 1: captura o texto de cada aula (o desc só vem no JSON da aula aberta).
+    // Contra o Skool, mantemos concorrência BAIXA + um respiro por request: o antigo
+    // loop espaçava 400ms de propósito ("não floodar"); aqui preservamos essa proteção
+    // (senão N fetches em rajada podem levar 429 e perder o texto em silêncio).
+    const CONC_TEXTO = 4, RESPIRO_MS = 200;
+    await mapConcorrente(aulas, CONC_TEXTO, async (aula) => {
         if (!aula.desc && aula._id && ctx && ctx.buildId) {
             const t = await buscarTextoDaAula(aula._id, ctx);
             if (t.desc) aula.desc = t.desc;
             if (t.resources && !pareceResources(aula.resources)) aula.resources = t.resources;
+            await new Promise(r => setTimeout(r, RESPIRO_MS));   // respiro anti-flood
         }
         if (aula.desc || pareceResources(aula.resources)) comTexto++;
+        textos++;
+        if (aoProgredir) aoProgredir('texto', textos, n);
+    });
 
+    // Fase 2: envia os pedidos ao servidor LOCAL. Cada POST é independente e o servidor
+    // responde na hora, fazendo o próprio enfileiramento (ThreadPoolExecutor). É
+    // localhost, então concorrência maior é segura e não precisa de respiro.
+    const CONC_ENVIO = 6;
+    await mapConcorrente(aulas, CONC_ENVIO, async (aula) => {
         try {
             await fetch(SERVIDOR, {
                 method: 'POST',
@@ -336,10 +426,10 @@ async function enfileirarCurso(aulas, ctx, aoProgredir) {
             console.error(`[Loom] Falha ao enfileirar "${aula.filename}":`, err);
         }
         enviadas++;
-        if (aoProgredir) aoProgredir(enviadas, aulas.length);
-        await new Promise(r => setTimeout(r, 400));  // respiro entre pedidos
-    }
-    console.log(`[Loom] textos capturados: ${comTexto}/${aulas.length} aulas`);
+        if (aoProgredir) aoProgredir('envio', enviadas, n);
+    });
+
+    console.log(`[Loom] textos capturados: ${comTexto}/${n} aulas`);
     return enviadas;
 }
 
@@ -420,10 +510,11 @@ function criarBotaoCurso() {
     btn.onclick = async () => {
         if (btn.disabled) return;   // já enfileirando; ignora cliques repetidos
 
-        const aulas = coletarAulasDoCurso();
+        const aulas = await coletarAulasDoCurso();
         if (!aulas.length) {
-            btn.innerText = '❌ Nenhuma aula encontrada';
-            setTimeout(() => { btn.innerText = '📚 Baixar curso inteiro'; }, 3000);
+            // Pode ser curso realmente vazio OU dados desatualizados (ver console).
+            btn.innerText = '❌ Nada encontrado — recarregue (F5)';
+            setTimeout(() => { btn.innerText = '📚 Baixar curso inteiro'; }, 4000);
             return;
         }
 
@@ -458,10 +549,18 @@ function criarBotaoCurso() {
         // Confirmado: dispara os POSTs. Busca o texto de cada aula em paralelo
         // com o enfileiramento (o desc só vem no JSON da aula aberta).
         btn.disabled = true;
+        enfileirandoEmAndamento = true;   // ativa o guarda beforeunload
         const ctx = obterContexto();
-        const enviadas = await enfileirarCurso(aulas, ctx, (i, n) => {
-            btn.innerText = `📡 Enfileirando ${i}/${n}...`;
-        });
+        let enviadas = 0;
+        try {
+            enviadas = await enfileirarCurso(aulas, ctx, (fase, i, n) => {
+                btn.innerText = fase === 'texto'
+                    ? `📝 Lendo textos ${i}/${n}...`
+                    : `📡 Enfileirando ${i}/${n}...`;
+            });
+        } finally {
+            enfileirandoEmAndamento = false;   // libera mesmo se algo falhar no meio
+        }
         btn.innerText = `⏳ ${enviadas} aulas na fila — veja o terminal`;
         setTimeout(() => {
             btn.disabled = false;
@@ -560,6 +659,16 @@ function iniciarObservador() {
 iniciarObservador();
 criarBotaoCurso();
 criarBotaoVimeo();
+
+// Guarda contra perder aulas: se o usuário recarregar ou fechar a aba ENQUANTO o
+// curso está sendo enfileirado, o navegador mostra o aviso nativo de "sair da
+// página?". Isso ataca exatamente o cenário relatado (recarregar no meio do envio).
+window.addEventListener('beforeunload', (e) => {
+    if (enfileirandoEmAndamento) {
+        e.preventDefault();
+        e.returnValue = '';   // exigido por alguns navegadores para exibir o aviso
+    }
+});
 
 // Detecção de Navegação em SPA (Single Page Application)
 // Sites modernos não recarregam a página ao mudar de aula, então vigiamos a URL.
