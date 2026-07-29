@@ -1,0 +1,332 @@
+<!doctype html>
+<html lang="pt-br">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Sifão — Design System</title>
+<style>
+  html,body{min-height:100%}
+  .page{min-height:100vh}
+  :root{
+    --accent:#3D7BFF; --accent-2:#00E0C6; --accent-ink:#0b1020;
+    --ok:#25C26E; --bad:#FF5A5A; --warn:#FFB020;
+    --bg:#F6F7FB; --surface:#FFFFFF; --surface-2:#EEF1F8;
+    --line:#DDE2EE; --ink:#141826; --muted:#5C647C; --faint:#8A93AD;
+    --tile-a:#3D7BFF; --tile-b:#00E0C6;
+    --radius:14px; --radius-sm:10px;
+    --shadow:0 10px 30px rgba(20,30,60,.10), 0 2px 8px rgba(20,30,60,.06);
+    --mono:"Cascadia Code","Consolas",ui-monospace,"SF Mono",Menlo,monospace;
+    --sans:"Segoe UI",system-ui,-apple-system,Roboto,Helvetica,Arial,sans-serif;
+  }
+  @media (prefers-color-scheme:dark){
+    :root{
+      --bg:#0E1220; --surface:#171B2E; --surface-2:#1E2338;
+      --line:#2A3149; --ink:#E7EAF3; --muted:#9AA3BE; --faint:#6C769A;
+      --shadow:0 14px 40px rgba(0,0,0,.45), 0 2px 10px rgba(0,0,0,.35);
+    }
+  }
+  :root[data-theme="light"]{
+    --bg:#F6F7FB; --surface:#FFFFFF; --surface-2:#EEF1F8;
+    --line:#DDE2EE; --ink:#141826; --muted:#5C647C; --faint:#8A93AD;
+    --shadow:0 10px 30px rgba(20,30,60,.10), 0 2px 8px rgba(20,30,60,.06);
+  }
+  :root[data-theme="dark"]{
+    --bg:#0E1220; --surface:#171B2E; --surface-2:#1E2338;
+    --line:#2A3149; --ink:#E7EAF3; --muted:#9AA3BE; --faint:#6C769A;
+    --shadow:0 14px 40px rgba(0,0,0,.45), 0 2px 10px rgba(0,0,0,.35);
+  }
+
+  *{box-sizing:border-box}
+  body{margin:0}
+  .page{
+    background:var(--bg); color:var(--ink); font-family:var(--sans);
+    line-height:1.55; -webkit-font-smoothing:antialiased;
+    padding:clamp(20px,5vw,56px);
+  }
+  .wrap{max-width:1080px; margin:0 auto}
+  h1,h2,h3{text-wrap:balance; margin:0}
+  a{color:inherit}
+
+  /* ---- Header / wordmark ---- */
+  .top{display:flex; align-items:center; gap:16px; flex-wrap:wrap}
+  .mark{width:52px; height:52px; border-radius:13px; flex:none;
+    background:linear-gradient(135deg,var(--tile-a),var(--tile-b));
+    display:grid; place-items:center; box-shadow:var(--shadow)}
+  .mark svg{width:30px; height:30px; display:block}
+  .word{display:flex; flex-direction:column; gap:2px}
+  .word b{font-size:26px; font-weight:800; letter-spacing:-.02em}
+  .word .sub{font-size:12.5px; color:var(--muted); letter-spacing:.02em}
+  .tag{margin-left:auto; font-family:var(--mono); font-size:11.5px; color:var(--muted);
+    border:1px solid var(--line); border-radius:999px; padding:6px 12px; background:var(--surface)}
+
+  .lede{margin:26px 0 6px; font-size:clamp(18px,2.4vw,22px); font-weight:600; letter-spacing:-.01em; max-width:62ch}
+  .lede .hi{color:var(--accent)}
+  .note{color:var(--muted); font-size:14px; max-width:66ch}
+
+  /* ---- section scaffolding ---- */
+  section{margin-top:44px}
+  .eyebrow{font-family:var(--mono); font-size:11px; text-transform:uppercase; letter-spacing:.16em;
+    color:var(--accent); display:flex; align-items:center; gap:10px; margin-bottom:14px}
+  .eyebrow::after{content:""; height:1px; flex:1; background:var(--line)}
+  .sec-title{font-size:19px; font-weight:750; letter-spacing:-.01em; margin-bottom:6px}
+
+  .grid{display:grid; gap:18px}
+  @media(min-width:760px){ .cols-3{grid-template-columns:repeat(3,1fr)} .cols-2{grid-template-columns:1.1fr .9fr} }
+  .card{background:var(--surface); border:1px solid var(--line); border-radius:var(--radius);
+    padding:18px; box-shadow:var(--shadow)}
+  .card h3{font-size:14px; font-weight:700; margin-bottom:4px}
+  .card p{margin:0; color:var(--muted); font-size:13px}
+
+  /* ---- palette ---- */
+  .swatches{display:flex; flex-wrap:wrap; gap:10px}
+  .sw{border:1px solid var(--line); border-radius:12px; overflow:hidden; width:132px; background:var(--surface)}
+  .sw .chip{height:56px}
+  .sw .meta{padding:8px 10px; font-family:var(--mono); font-size:11px}
+  .sw .meta b{display:block; font-family:var(--sans); font-size:12px; font-weight:700; margin-bottom:1px}
+  .sw .meta span{color:var(--muted)}
+
+  /* ---- the unified pill (the real component) ---- */
+  .pill{display:inline-flex; align-items:stretch; border-radius:999px; overflow:hidden;
+    font-family:var(--sans); font-weight:650; font-size:13.5px; color:#fff;
+    box-shadow:0 6px 16px rgba(10,20,50,.35); border:1px solid rgba(255,255,255,.14)}
+  .pill .seg{display:inline-flex; align-items:center; gap:8px; padding:9px 15px;
+    background:linear-gradient(180deg,#4a83ff,#2f6bff); cursor:pointer; white-space:nowrap}
+  .pill .seg svg{width:15px; height:15px}
+  .pill .seg:hover{filter:brightness(1.07)}
+  .pill.solo .seg{border-radius:999px}
+
+  /* mock video players */
+  .players{display:grid; gap:16px}
+  @media(min-width:760px){ .players{grid-template-columns:repeat(3,1fr)} }
+  .player{position:relative; border-radius:var(--radius); overflow:hidden; border:1px solid var(--line);
+    aspect-ratio:16/10; box-shadow:var(--shadow)}
+  .player .scene{position:absolute; inset:0; display:grid; place-items:center}
+  .player .brandtag{position:absolute; left:12px; top:12px; font-family:var(--mono); font-size:10.5px;
+    letter-spacing:.08em; text-transform:uppercase; color:#fff; opacity:.85;
+    background:rgba(0,0,0,.35); padding:4px 8px; border-radius:6px}
+  .player .pill{position:absolute; top:12px; right:12px}
+  .player .playbtn{width:54px; height:54px; border-radius:50%; background:rgba(255,255,255,.16);
+    border:1px solid rgba(255,255,255,.35); display:grid; place-items:center}
+  .player .playbtn svg{width:22px;height:22px}
+  .scene.loom{background:radial-gradient(120% 120% at 30% 20%,#3a2d63,#171033)}
+  .scene.yt{background:radial-gradient(120% 120% at 70% 30%,#3a1420,#140a0e)}
+  .scene.vimeo{background:radial-gradient(120% 120% at 40% 70%,#0e3550,#07141f)}
+  .player .cap{position:absolute; left:0; right:0; bottom:0; padding:10px 12px;
+    background:linear-gradient(180deg,transparent,rgba(0,0,0,.55)); color:#fff; font-size:12px}
+
+  /* ---- popup control center (real ~320px) ---- */
+  .popup{width:320px; max-width:100%; background:var(--surface); border:1px solid var(--line);
+    border-radius:var(--radius); box-shadow:var(--shadow); overflow:hidden; font-family:var(--sans)}
+  .pu-head{display:flex; align-items:center; gap:10px; padding:13px 15px; border-bottom:1px solid var(--line)}
+  .pu-head .mk{width:26px;height:26px;border-radius:8px;background:linear-gradient(135deg,var(--tile-a),var(--tile-b));display:grid;place-items:center}
+  .pu-head .mk svg{width:15px;height:15px}
+  .pu-head b{font-size:14px; font-weight:750; letter-spacing:-.01em}
+  .pu-head .status{margin-left:auto; display:inline-flex; align-items:center; gap:6px;
+    font-size:11.5px; color:var(--muted); font-family:var(--mono)}
+  .dot{width:8px;height:8px;border-radius:50%;background:var(--ok); box-shadow:0 0 0 3px color-mix(in srgb,var(--ok) 22%,transparent)}
+  .pu-body{padding:15px; display:flex; flex-direction:column; gap:14px}
+  .ctx{background:var(--surface-2); border:1px solid var(--line); border-radius:var(--radius-sm); padding:12px}
+  .ctx .k{font-size:10.5px; text-transform:uppercase; letter-spacing:.12em; color:var(--faint); font-family:var(--mono)}
+  .ctx .v{font-size:14px; font-weight:700; margin:3px 0 10px}
+  .btn{display:flex; align-items:center; justify-content:center; gap:9px; width:100%;
+    padding:11px; border-radius:var(--radius-sm); border:none; cursor:pointer;
+    font-family:var(--sans); font-weight:700; font-size:13.5px; color:#fff;
+    background:linear-gradient(180deg,#4a83ff,#2f6bff); box-shadow:0 6px 16px rgba(47,107,255,.35)}
+  .btn svg{width:16px;height:16px}
+  .btn.ghost{background:transparent; color:var(--ink); border:1px solid var(--line); box-shadow:none}
+  .field label{display:block; font-size:11px; text-transform:uppercase; letter-spacing:.1em;
+    color:var(--faint); font-family:var(--mono); margin-bottom:6px}
+  .field input{width:100%; padding:10px 12px; border-radius:var(--radius-sm); border:1px solid var(--line);
+    background:var(--bg); color:var(--ink); font-size:13px; font-family:var(--mono)}
+  .field input::placeholder{color:var(--faint)}
+  .divider{height:1px; background:var(--line)}
+  .recent{display:flex; flex-direction:column; gap:8px}
+  .recent .row{display:flex; align-items:center; gap:9px; font-size:12px}
+  .recent .row .nm{font-family:var(--mono); color:var(--muted); overflow:hidden; text-overflow:ellipsis; white-space:nowrap}
+  .recent .row .st{margin-left:auto; font-size:10.5px; font-family:var(--mono)}
+  .st.done{color:var(--ok)} .st.run{color:var(--accent)}
+  .bar{height:4px; border-radius:99px; background:var(--surface-2); overflow:hidden; flex:none; width:54px}
+  .bar i{display:block; height:100%; background:var(--accent)}
+
+  /* ---- icon sizes ---- */
+  .icons{display:flex; align-items:flex-end; gap:24px; flex-wrap:wrap}
+  .ic{display:flex; flex-direction:column; align-items:center; gap:8px}
+  .ic .tile{border-radius:22%; background:linear-gradient(135deg,var(--tile-a),var(--tile-b));
+    display:grid; place-items:center; box-shadow:var(--shadow)}
+  .ic .tile svg{width:62%; height:62%}
+  .ic small{font-family:var(--mono); font-size:11px; color:var(--muted)}
+
+  /* before/after */
+  .ba{display:grid; gap:14px}
+  @media(min-width:760px){ .ba{grid-template-columns:1fr 1fr} }
+  .ba .col{border:1px solid var(--line); border-radius:var(--radius); overflow:hidden; background:var(--surface)}
+  .ba .col header{padding:11px 15px; font-size:12px; font-weight:700; font-family:var(--mono);
+    letter-spacing:.04em; border-bottom:1px solid var(--line)}
+  .ba .before header{color:var(--bad)}
+  .ba .after header{color:var(--ok)}
+  .ba ul{margin:0; padding:14px 15px 16px 30px; font-size:13px; color:var(--muted); display:flex; flex-direction:column; gap:7px}
+
+  .path{font-family:var(--mono); font-size:12.5px; background:var(--surface-2); border:1px solid var(--line);
+    border-radius:8px; padding:3px 8px; color:var(--ink); display:inline-block}
+
+  footer{margin-top:52px; padding-top:20px; border-top:1px solid var(--line); color:var(--faint); font-size:12.5px}
+</style>
+
+<div class="page">
+<div class="wrap">
+
+  <div class="top">
+    <div class="mark" aria-hidden="true">
+      <svg viewBox="0 0 24 24" fill="none"><path d="M12 3v10.5" stroke="#fff" stroke-width="2.4" stroke-linecap="round"/><path d="M7.2 9.4 12 14.2l4.8-4.8" stroke="#fff" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"/><path d="M5.5 19h13" stroke="#fff" stroke-width="2.4" stroke-linecap="round"/></svg>
+    </div>
+    <div class="word">
+      <b>Sifão</b>
+      <span class="sub">Baixador de aulas — Skool · Loom · YouTube · Vimeo</span>
+    </div>
+    <span class="tag">proposta de identidade · v3</span>
+  </div>
+
+  <p class="lede">Uma extensão, <span class="hi">uma linguagem visual só</span>. O mesmo pill sobre qualquer vídeo; toda a inteligência de curso e status no popup.</p>
+  <p class="note"><b>Nome “Sifão” é sugestão</b> — troque à vontade (ideias: Cascata, Colheita, CourseGrab). O que importa aqui é o sistema visual, o ícone e onde cada ação vive. Alterne o tema (☀/🌙) no topo da página para ver claro e escuro.</p>
+
+  <!-- PALETTE -->
+  <section>
+    <div class="eyebrow">01 · Paleta &amp; tokens</div>
+    <h2 class="sec-title">Azul-elétrico com um aqua de apoio — nada de verde-Skool nem vermelho-YouTube</h2>
+    <p class="note" style="margin-bottom:16px">Identidade própria e neutra entre as plataformas. Cores semânticas (online/erro) são separadas do acento, para estado nunca competir com marca.</p>
+    <div class="swatches">
+      <div class="sw"><div class="chip" style="background:#3D7BFF"></div><div class="meta"><b>Acento</b><span>#3D7BFF</span></div></div>
+      <div class="sw"><div class="chip" style="background:linear-gradient(135deg,#3D7BFF,#00E0C6)"></div><div class="meta"><b>Mark (grad.)</b><span>→ #00E0C6</span></div></div>
+      <div class="sw"><div class="chip" style="background:#0E1220"></div><div class="meta"><b>Fundo escuro</b><span>#0E1220</span></div></div>
+      <div class="sw"><div class="chip" style="background:#171B2E"></div><div class="meta"><b>Superfície</b><span>#171B2E</span></div></div>
+      <div class="sw"><div class="chip" style="background:#25C26E"></div><div class="meta"><b>Online</b><span>#25C26E</span></div></div>
+      <div class="sw"><div class="chip" style="background:#FF5A5A"></div><div class="meta"><b>Offline/erro</b><span>#FF5A5A</span></div></div>
+    </div>
+  </section>
+
+  <!-- UNIFIED PILL -->
+  <section>
+    <div class="eyebrow">02 · O pill unificado (na página)</div>
+    <h2 class="sec-title">O mesmo componente sobre qualquer player — estilo Internet Download Manager</h2>
+    <p class="note" style="margin-bottom:16px">Mesma forma, cor, ícone e fonte no Loom, no YouTube e no Vimeo. Só o rótulo muda. Ancorado ao canto do vídeo, discreto até você precisar dele.</p>
+    <div class="players">
+      <div class="player">
+        <div class="scene loom"><div class="playbtn"><svg viewBox="0 0 24 24"><path d="M8 5v14l11-7z" fill="#fff"/></svg></div></div>
+        <span class="brandtag">Skool · Loom</span>
+        <div class="pill solo"><span class="seg"><svg viewBox="0 0 24 24" fill="none"><path d="M12 3v10.5" stroke="#fff" stroke-width="2.4" stroke-linecap="round"/><path d="M7.2 9.4 12 14.2l4.8-4.8" stroke="#fff" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"/><path d="M5.5 19h13" stroke="#fff" stroke-width="2.4" stroke-linecap="round"/></svg>Baixar aula</span></div>
+        <div class="cap">Aula: “A estrutura”</div>
+      </div>
+      <div class="player">
+        <div class="scene yt"><div class="playbtn"><svg viewBox="0 0 24 24"><path d="M8 5v14l11-7z" fill="#fff"/></svg></div></div>
+        <span class="brandtag">YouTube</span>
+        <div class="pill solo"><span class="seg"><svg viewBox="0 0 24 24" fill="none"><path d="M12 3v10.5" stroke="#fff" stroke-width="2.4" stroke-linecap="round"/><path d="M7.2 9.4 12 14.2l4.8-4.8" stroke="#fff" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"/><path d="M5.5 19h13" stroke="#fff" stroke-width="2.4" stroke-linecap="round"/></svg>Baixar vídeo</span></div>
+        <div class="cap">Canal: Hashtag Treinamentos</div>
+      </div>
+      <div class="player">
+        <div class="scene vimeo"><div class="playbtn"><svg viewBox="0 0 24 24"><path d="M8 5v14l11-7z" fill="#fff"/></svg></div></div>
+        <span class="brandtag">Skool · Vimeo</span>
+        <div class="pill solo"><span class="seg"><svg viewBox="0 0 24 24" fill="none"><path d="M12 3v10.5" stroke="#fff" stroke-width="2.4" stroke-linecap="round"/><path d="M7.2 9.4 12 14.2l4.8-4.8" stroke="#fff" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"/><path d="M5.5 19h13" stroke="#fff" stroke-width="2.4" stroke-linecap="round"/></svg>Baixar vídeo</span></div>
+        <div class="cap">Post da comunidade</div>
+      </div>
+    </div>
+  </section>
+
+  <!-- POPUP -->
+  <section>
+    <div class="eyebrow">03 · Popup — central de controle</div>
+    <h2 class="sec-title">Curso inteiro, status do servidor e link do YouTube num só lugar</h2>
+    <div class="grid cols-2" style="align-items:start">
+      <div style="display:flex; justify-content:center">
+        <div class="popup">
+          <div class="pu-head">
+            <span class="mk"><svg viewBox="0 0 24 24" fill="none"><path d="M12 3v10.5" stroke="#fff" stroke-width="2.6" stroke-linecap="round"/><path d="M7.2 9.4 12 14.2l4.8-4.8" stroke="#fff" stroke-width="2.6" stroke-linecap="round" stroke-linejoin="round"/><path d="M5.5 19h13" stroke="#fff" stroke-width="2.6" stroke-linecap="round"/></svg></span>
+            <b>Sifão</b>
+            <span class="status"><span class="dot"></span>servidor online</span>
+          </div>
+          <div class="pu-body">
+            <div class="ctx">
+              <div class="k">Curso detectado na aba</div>
+              <div class="v">CASH.doc · 11 aulas</div>
+              <button class="btn"><svg viewBox="0 0 24 24" fill="none"><path d="M4 5h16M4 12h16M4 19h10" stroke="#fff" stroke-width="2" stroke-linecap="round"/></svg>Baixar curso inteiro</button>
+            </div>
+            <div class="field">
+              <label>Link do YouTube</label>
+              <input type="text" placeholder="https://youtube.com/watch?v=…" readonly>
+            </div>
+            <button class="btn ghost"><svg viewBox="0 0 24 24" fill="none"><path d="M12 3v10.5" stroke="currentColor" stroke-width="2.2" stroke-linecap="round"/><path d="M7.5 9.5 12 14l4.5-4.5" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"/><path d="M6 19h12" stroke="currentColor" stroke-width="2.2" stroke-linecap="round"/></svg>Baixar vídeo colado</button>
+            <div class="divider"></div>
+            <div class="recent">
+              <div class="k" style="font-family:var(--mono);font-size:10.5px;text-transform:uppercase;letter-spacing:.12em;color:var(--faint)">Na fila / recentes</div>
+              <div class="row"><span class="nm">A estrutura.mp4</span><span class="st done">✓ pronto</span></div>
+              <div class="row"><span class="nm">As duas ofertas.mp4</span><span class="bar"><i style="width:64%"></i></span><span class="st run">64%</span></div>
+              <div class="row"><span class="nm">Aula 1 — Criando agentes.mp4</span><span class="st run">na fila</span></div>
+            </div>
+          </div>
+        </div>
+      </div>
+      <div class="grid" style="gap:12px">
+        <div class="card"><h3>Contextual à aba</h3><p>O popup lê a aba ativa: se for uma classroom do Skool, mostra o curso e o botão “Baixar curso inteiro”. Fora do Skool, esse bloco some.</p></div>
+        <div class="card"><h3>Status real do servidor</h3><p>O pontinho verde/vermelho faz ping no <span class="path">localhost:5000</span>. Você sabe na hora se precisa subir o servidor — sem clicar e ver “offline”.</p></div>
+        <div class="card"><h3>Página limpa</h3><p>Sai o botão flutuante de curso no canto. A página do Skool volta a ser a página do Skool; a ação de lote mora no popup.</p></div>
+      </div>
+    </div>
+  </section>
+
+  <!-- ICON -->
+  <section>
+    <div class="eyebrow">04 · Ícone da toolbar</div>
+    <h2 class="sec-title">Um mark que lê a 16px — seta de download sobre a bandeja</h2>
+    <p class="note" style="margin-bottom:18px">Tile arredondado no gradiente da marca, glifo branco. Simples de propósito: sobrevive ao favicon de 16px e ainda fica bonito a 128.</p>
+    <div class="icons">
+      <div class="ic"><div class="tile" style="width:16px;height:16px"><svg viewBox="0 0 24 24" fill="none"><path d="M12 4v9.5" stroke="#fff" stroke-width="2.6" stroke-linecap="round"/><path d="M7.5 9.8 12 14.3l4.5-4.5" stroke="#fff" stroke-width="2.6" stroke-linecap="round" stroke-linejoin="round"/><path d="M6 19h12" stroke="#fff" stroke-width="2.6" stroke-linecap="round"/></svg></div><small>16</small></div>
+      <div class="ic"><div class="tile" style="width:32px;height:32px"><svg viewBox="0 0 24 24" fill="none"><path d="M12 4v9.5" stroke="#fff" stroke-width="2.4" stroke-linecap="round"/><path d="M7.5 9.8 12 14.3l4.5-4.5" stroke="#fff" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"/><path d="M6 19h12" stroke="#fff" stroke-width="2.4" stroke-linecap="round"/></svg></div><small>32</small></div>
+      <div class="ic"><div class="tile" style="width:48px;height:48px"><svg viewBox="0 0 24 24" fill="none"><path d="M12 4v9.5" stroke="#fff" stroke-width="2.2" stroke-linecap="round"/><path d="M7.5 9.8 12 14.3l4.5-4.5" stroke="#fff" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"/><path d="M6 19h12" stroke="#fff" stroke-width="2.2" stroke-linecap="round"/></svg></div><small>48</small></div>
+      <div class="ic"><div class="tile" style="width:128px;height:128px"><svg viewBox="0 0 24 24" fill="none"><path d="M12 4v9.5" stroke="#fff" stroke-width="2" stroke-linecap="round"/><path d="M7.5 9.8 12 14.3l4.5-4.5" stroke="#fff" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/><path d="M6 19h12" stroke="#fff" stroke-width="2" stroke-linecap="round"/></svg></div><small>128</small></div>
+    </div>
+  </section>
+
+  <!-- YOUTUBE BY CHANNEL -->
+  <section>
+    <div class="eyebrow">05 · YouTube organizado por canal</div>
+    <h2 class="sec-title">Mesma lógica de pastas do Skool, agora com o nome do canal</h2>
+    <p class="note" style="margin-bottom:14px">Resolvido no servidor (o yt-dlp já sabe o canal), então vale para <b>qualquer</b> entrada — pill, popup ou link colado.</p>
+    <div style="display:flex; flex-direction:column; gap:8px">
+      <div><span class="path">output/YouTube/Hashtag Treinamentos/Aula 1 - Criando agentes de IA.mp4</span></div>
+      <div><span class="path">output/YouTube/Filipe Deschamps/Como funciona a internet.mp4</span></div>
+    </div>
+  </section>
+
+  <!-- BEFORE / AFTER -->
+  <section>
+    <div class="eyebrow">06 · Antes → depois</div>
+    <h2 class="sec-title">De cinco superfícies soltas a um sistema</h2>
+    <div class="ba">
+      <div class="col before">
+        <header>ANTES — bagunça</header>
+        <ul>
+          <li>Verde #00d084 numa tela, roxo #6c5ce7 na outra</li>
+          <li>4 posições diferentes (sobre o vídeo, 2× canto inferior, flutuante)</li>
+          <li>3 textos p/ “baixar vídeo”, sem ícone de marca</li>
+          <li>Botão de curso flutuando “tipo anúncio”</li>
+        </ul>
+      </div>
+      <div class="col after">
+        <header>DEPOIS — Sifão</header>
+        <ul>
+          <li>Um acento, um gradiente, um mark em tudo</li>
+          <li>Pill sempre no canto do vídeo; lote e status no popup</li>
+          <li>Ícone de toolbar próprio (16→128)</li>
+          <li>Página limpa, cara de produto para o GitHub</li>
+        </ul>
+      </div>
+    </div>
+  </section>
+
+  <footer>
+    Mockup de aprovação · nada aqui é funcional. Ao aprovar (ou ajustar cor/nome), eu implemento o sistema na extensão e gero os PNGs do ícone. Sifão — proposta de identidade.
+  </footer>
+
+</div>
+</div>
+</body>
+</html>
