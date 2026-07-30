@@ -1,9 +1,9 @@
-// Botão de download direto na página do YouTube (youtube.com/watch).
-// Clica -> manda a URL do vídeo pro servidor local, que baixa via yt-dlp.
+// Botão de download (pill Sifão) na página do YouTube (youtube.com/watch).
+// Mesmo visual do pill do Skool/Loom/Vimeo — os estilos vêm do ui.css compartilhado.
 // O YouTube é uma SPA: a URL muda sem recarregar, então vigiamos as mudanças.
 
 const SERVIDOR = 'http://localhost:5000/baixar';
-const ID_BOTAO = 'loom-yt-download-btn';
+const ID_BOTAO = 'sf-youtube';
 
 function ehPaginaDeVideo() {
     return location.pathname === '/watch' &&
@@ -18,39 +18,40 @@ function urlLimpaDoVideo() {
 
 function tituloDoVideo() {
     // document.title = "TÍTULO - YouTube". O servidor limpa caracteres proibidos.
+    // A pasta do canal é resolvida no servidor (yt-dlp) → output/YouTube/<Canal>/.
     return document.title.replace(/\s*-\s*YouTube\s*$/i, '').trim();
 }
 
-function estilizar(btn) {
-    Object.assign(btn.style, {
-        position: 'fixed',
-        bottom: '90px',
-        right: '20px',
-        zIndex: '99999',
-        padding: '12px 18px',
-        borderRadius: '10px',
-        border: 'none',
-        background: '#6c5ce7',
-        color: '#fff',
-        font: '600 14px system-ui, sans-serif',
-        cursor: 'pointer',
-        boxShadow: '0 6px 14px rgba(0,0,0,0.35)',
-    });
+// Fábrica do pill — idêntica à do content.js; visual vem do ui.css (.sf-pill).
+function criarPill(rotulo, fixo) {
+    const btn = document.createElement('button');
+    btn.className = 'sf-pill ' + (fixo ? 'sf-pill--fixed' : 'sf-pill--overlay');
+    const ico = document.createElement('span');
+    ico.className = 'sf-pill__ico';
+    const lab = document.createElement('span');
+    lab.className = 'sf-pill__label';
+    lab.textContent = rotulo;
+    btn.append(ico, lab);
+    btn._lab = lab;
+    return btn;
 }
 
 function criarBotao() {
     if (!ehPaginaDeVideo()) { removerBotao(); return; }
     if (document.getElementById(ID_BOTAO)) return;
 
-    const btn = document.createElement('button');
+    // Ancora SOBRE o player, como no Loom. Se o player ainda não renderizou, NÃO cria
+    // agora — o observador tenta de novo quando ele aparecer (evita cair no canto).
+    const player = document.querySelector('#movie_player, .html5-video-player');
+    if (!player) return;
+
+    const btn = criarPill('Baixar vídeo', false);   // overlay no canto do vídeo
     btn.id = ID_BOTAO;
-    btn.textContent = '⬇ Baixar vídeo';
-    estilizar(btn);
 
     btn.onclick = async () => {
         if (btn.disabled) return;
         btn.disabled = true;
-        btn.textContent = '📡 Enviando...';
+        btn._lab.textContent = 'Enviando…';
         try {
             const resp = await fetch(SERVIDOR, {
                 method: 'POST',
@@ -62,15 +63,21 @@ function criarBotao() {
                 }),
             });
             await resp.json();
-            btn.textContent = '⏳ Na fila';
+            btn._lab.textContent = 'Na fila';
         } catch (e) {
             console.error('[YouTube DL] servidor offline?', e);
-            btn.textContent = '❌ Servidor offline?';
+            btn.classList.add('sf-pill--err');
+            btn._lab.textContent = 'Servidor offline?';
         }
-        setTimeout(() => { btn.disabled = false; btn.textContent = '⬇ Baixar vídeo'; }, 4000);
+        setTimeout(() => {
+            btn.disabled = false;
+            btn.classList.remove('sf-pill--err');
+            btn._lab.textContent = 'Baixar vídeo';
+        }, 4000);
     };
 
-    document.body.appendChild(btn);
+    if (getComputedStyle(player).position === 'static') player.style.position = 'relative';
+    player.appendChild(btn);
 }
 
 function removerBotao() {
@@ -78,12 +85,16 @@ function removerBotao() {
     if (btn) btn.remove();
 }
 
-// Injeta agora e a cada mudança de URL (navegação SPA do YouTube).
+// Injeta agora e vigia a página. O YouTube troca de vídeo sem recarregar (SPA) e
+// ainda re-renderiza o player durante o uso — então, além de recriar na mudança de
+// URL, recolocamos o pill se ele sumir enquanto estivermos numa página de vídeo.
 criarBotao();
 let urlAtual = location.href;
 new MutationObserver(() => {
     if (location.href !== urlAtual) {
         urlAtual = location.href;
         setTimeout(criarBotao, 500);
+        return;
     }
+    if (ehPaginaDeVideo() && !document.getElementById(ID_BOTAO)) criarBotao();
 }).observe(document, { subtree: true, childList: true });

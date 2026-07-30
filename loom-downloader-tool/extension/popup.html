@@ -1,31 +1,96 @@
 <!DOCTYPE html>
 <html lang="pt-br">
 <head>
-  <meta charset="utf-8">
-  <style>
-    body { width: 300px; margin: 0; padding: 16px; font: 14px system-ui, sans-serif;
-           background: #1e1e2e; color: #eee; }
-    h3 { margin: 0 0 12px; font-size: 15px; }
-    label { display: block; font-size: 12px; color: #aaa; margin: 10px 0 4px; }
-    input { width: 100%; box-sizing: border-box; padding: 8px; border-radius: 6px;
-            border: 1px solid #444; background: #2a2a3c; color: #eee; font-size: 13px; }
-    button { width: 100%; margin-top: 12px; padding: 10px; border: none; border-radius: 8px;
-             background: #6c5ce7; color: #fff; font-weight: 600; font-size: 14px; cursor: pointer; }
-    button:disabled { opacity: 0.6; cursor: default; }
-    #status { margin-top: 10px; font-size: 12px; min-height: 16px; }
-  </style>
+<meta charset="utf-8">
+<style>
+  :root{
+    --accent:#3D7BFF; --accent-2:#00E0C6; --ok:#25C26E; --bad:#FF5A5A;
+    --bg:#FFFFFF; --surface:#F6F7FB; --line:#DDE2EE;
+    --ink:#141826; --muted:#5C647C; --faint:#8A93AD;
+    --radius:12px; --radius-sm:10px;
+    --mono:"Cascadia Code","Consolas",ui-monospace,monospace;
+    --sans:"Segoe UI",system-ui,-apple-system,Roboto,Helvetica,Arial,sans-serif;
+  }
+  @media (prefers-color-scheme:dark){
+    :root{
+      --bg:#171B2E; --surface:#1E2338; --line:#2A3149;
+      --ink:#E7EAF3; --muted:#9AA3BE; --faint:#6C769A;
+    }
+  }
+  *{box-sizing:border-box}
+  body{ width:320px; margin:0; background:var(--bg); color:var(--ink); font-family:var(--sans); }
+
+  .head{ display:flex; align-items:center; gap:10px; padding:13px 15px; border-bottom:1px solid var(--line); }
+  .mk{ width:26px; height:26px; border-radius:8px; flex:none; display:grid; place-items:center;
+       background:linear-gradient(135deg,var(--accent),var(--accent-2)); }
+  .mk svg{ width:15px; height:15px; }
+  .head b{ font-size:14px; font-weight:750; letter-spacing:-.01em; }
+  .status{ margin-left:auto; display:inline-flex; align-items:center; gap:6px;
+           font-size:11px; color:var(--muted); font-family:var(--mono); }
+  .dot{ width:8px; height:8px; border-radius:50%; background:var(--faint); }
+  .dot.on{ background:var(--ok); box-shadow:0 0 0 3px color-mix(in srgb,var(--ok) 22%,transparent); }
+  .dot.off{ background:var(--bad); box-shadow:0 0 0 3px color-mix(in srgb,var(--bad) 22%,transparent); }
+
+  .body{ padding:15px; display:flex; flex-direction:column; gap:14px; }
+
+  .ctx{ background:var(--surface); border:1px solid var(--line); border-radius:var(--radius-sm); padding:12px; }
+  .ctx .k{ font-size:10px; text-transform:uppercase; letter-spacing:.12em; color:var(--faint); font-family:var(--mono); }
+  .ctx .v{ font-size:14px; font-weight:700; margin:3px 0 10px; }
+
+  .field label{ display:block; font-size:10px; text-transform:uppercase; letter-spacing:.1em;
+                color:var(--faint); font-family:var(--mono); margin-bottom:6px; }
+  .field input{ width:100%; padding:10px 12px; border-radius:var(--radius-sm); border:1px solid var(--line);
+                background:var(--bg); color:var(--ink); font-size:13px; font-family:var(--mono); }
+  .field input::placeholder{ color:var(--faint); }
+
+  .btn{ display:flex; align-items:center; justify-content:center; gap:9px; width:100%;
+        padding:11px; border-radius:var(--radius-sm); border:none; cursor:pointer;
+        font-family:var(--sans); font-weight:700; font-size:13.5px; color:#fff;
+        background:linear-gradient(180deg,#4a83ff,#2f6bff); box-shadow:0 6px 16px rgba(47,107,255,.30); }
+  .btn:hover{ filter:brightness(1.06); }
+  .btn:disabled{ opacity:.6; cursor:default; filter:none; }
+  .btn svg{ width:16px; height:16px; }
+  .btn.ghost{ background:transparent; color:var(--ink); border:1px solid var(--line); box-shadow:none; }
+
+  .divider{ height:1px; background:var(--line); }
+  .hint{ font-size:11.5px; color:var(--muted); min-height:15px; }
+  .hidden{ display:none; }
+</style>
 </head>
 <body>
-  <h3>⬇ Baixar vídeo do YouTube</h3>
 
-  <label for="url">Link do vídeo</label>
-  <input id="url" type="text" placeholder="https://www.youtube.com/watch?v=...">
+  <div class="head">
+    <span class="mk">
+      <svg viewBox="0 0 24 24" fill="none"><path d="M12 4v9.5" stroke="#fff" stroke-width="2.6" stroke-linecap="round"/><path d="M7.5 9.8 12 14.3l4.5-4.5" stroke="#fff" stroke-width="2.6" stroke-linecap="round" stroke-linejoin="round"/><path d="M6 19h12" stroke="#fff" stroke-width="2.6" stroke-linecap="round"/></svg>
+    </span>
+    <b>Sifão</b>
+    <span class="status"><span id="dot" class="dot"></span><span id="statusTxt">verificando…</span></span>
+  </div>
 
-  <label for="folder">Pasta (dentro de output/)</label>
-  <input id="folder" type="text" value="YouTube">
+  <div class="body">
 
-  <button id="baixar">Baixar</button>
-  <div id="status"></div>
+    <div id="ctxCurso" class="ctx hidden">
+      <div class="k">Curso detectado na aba</div>
+      <div class="v" id="cursoNome">—</div>
+      <button class="btn" id="btnCurso">
+        <svg viewBox="0 0 24 24" fill="none"><path d="M4 5h16M4 12h16M4 19h10" stroke="#fff" stroke-width="2" stroke-linecap="round"/></svg>
+        <span id="btnCursoTxt">Baixar curso inteiro</span>
+      </button>
+    </div>
+
+    <div class="field">
+      <label for="url">Link do YouTube</label>
+      <input id="url" type="text" placeholder="https://youtube.com/watch?v=…" autocomplete="off">
+    </div>
+    <button class="btn ghost" id="btnYt">
+      <svg viewBox="0 0 24 24" fill="none"><path d="M12 3v10.5" stroke="currentColor" stroke-width="2.2" stroke-linecap="round"/><path d="M7.5 9.5 12 14l4.5-4.5" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"/><path d="M6 19h12" stroke="currentColor" stroke-width="2.2" stroke-linecap="round"/></svg>
+      <span>Baixar vídeo colado</span>
+    </button>
+
+    <div class="divider"></div>
+    <div id="hint" class="hint"></div>
+
+  </div>
 
   <script src="popup.js"></script>
 </body>

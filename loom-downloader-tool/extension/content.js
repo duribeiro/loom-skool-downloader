@@ -251,7 +251,18 @@ async function coletarAulasDoCurso() {
         console.warn('[Loom] Não achei os dados do curso nesta página.');
         return [];
     }
+    return extrairAulas(pp);
+}
 
+async function contextoCurso() {
+    // Para o popup (central de controle): título e nº de aulas do curso da aba atual.
+    const pp = await obterPagePropsDoCurso();
+    if (!pp || !pp.course) return { ok: false };
+    const meta = (pp.course.course && metaDe(pp.course.course)) || {};
+    return { ok: true, title: meta.title || 'Curso', count: extrairAulas(pp).length };
+}
+
+function extrairAulas(pp) {
     // Nome "bonito" da comunidade (ex: BACKROOM.EXE), não o slug (backroomexe-3259).
     // O displayName é o mesmo que o botão de aula individual usa (via document.title),
     // então os dois botões gravam na MESMA pasta de comunidade.
@@ -433,141 +444,131 @@ async function enfileirarCurso(aulas, ctx, aoProgredir) {
     return enviadas;
 }
 
-// --- 2. INJEÇÃO DO BOTÃO ---
+// --- 2. COMPONENTE DE DOWNLOAD (pill unificado) ---
+
+// Fábrica do pill: mesmo visual em Loom e Vimeo (o youtube.js tem a sua, idêntica).
+// O ícone vem do ui.css (.sf-pill__ico); o texto fica num span para trocar o
+// rótulo/estado sem perder o ícone. `fixo` = canto da tela; senão overlay no vídeo.
+function criarPill(rotulo, fixo) {
+    const btn = document.createElement('button');
+    btn.className = 'sf-pill ' + (fixo ? 'sf-pill--fixed' : 'sf-pill--overlay');
+    const ico = document.createElement('span');
+    ico.className = 'sf-pill__ico';
+    const lab = document.createElement('span');
+    lab.className = 'sf-pill__label';
+    lab.textContent = rotulo;
+    btn.append(ico, lab);
+    btn._lab = lab;   // atalho p/ atualizar o texto de estado
+    return btn;
+}
+
+// Caminho REAL da aula ABERTA (Comunidade/Curso/Módulo), o MESMO que o "curso
+// inteiro" usa. Sem isto, o botão individual montava a pasta pelo document.title —
+// que não traz o módulo — e a aula caía fora da subpasta (ex.: solta em AGENTES
+// NEURAIS em vez de AGENTES NEURAIS/Nivelamento), sem deduplicar a cópia já baixada.
+// Devolve null quando não dá pra resolver (ex.: loom.com fora do Skool) — aí o
+// chamador cai no obterDadosDaPagina() antigo.
+async function dadosDaAulaAtual() {
+    const md = new URLSearchParams(location.search).get('md');
+    if (!md) return null;
+    const pp = await obterPagePropsDoCurso();
+    if (!pp || !pp.course) return null;
+    const porId = coletarUnits(pp.course);
+    const unit = porId[md];
+    if (!unit) return null;
+    const cg = pp.currentGroup || {};
+    const comunidade = (cg.metadata && cg.metadata.displayName) || cg.name || 'Skool';
+    const meta = metaDe(unit) || {};
+    const { curso, modulos } = caminhoDaAula(unit, porId);
+    const pasta = [comunidade, curso, ...modulos].filter(Boolean).map(limparTexto).join('/');
+    return { folder: pasta, filename: limparTexto(meta.title || 'Aula sem titulo') };
+}
 
 function criarBotaoDownload(iframe) {
-    // Evita criar dois botões no mesmo vídeo
-    if (iframe.parentNode.querySelector('.meu-botao-download')) return;
+    // Evita criar dois pills no mesmo vídeo
+    if (iframe.parentNode.querySelector('.sf-pill')) return;
 
-    // Garante que o container do vídeo tenha posição relativa
-    // (Isso é necessário para o botão "absolute" ficar preso ao vídeo, não à página)
+    // Garante que o container do vídeo tenha posição relativa (o overlay é absolute).
     if (getComputedStyle(iframe.parentNode).position === 'static') {
         iframe.parentNode.style.position = 'relative';
     }
 
-    const btn = document.createElement('button');
-    btn.innerText = '⬇ Baixar Aula';
-    btn.className = 'meu-botao-download'; // Estilizado no style.css
-    
-    // Adiciona o evento de clique
-    btn.onclick = (e) => {
+    const btn = criarPill('Baixar aula', false);
+
+    btn.onclick = async (e) => {
         e.preventDefault();
         e.stopPropagation();
+        if (btn.disabled) return;
 
-        const dados = obterDadosDaPagina(); 
         const urlEmbed = iframe.src;
+        btn.disabled = true;
+        btn._lab.textContent = 'Enviando…';
 
-        // Feedback Visual: "Processando..."
-        btn.innerText = '📡 ...';
-        btn.style.backgroundColor = '#95a5a6'; // Cinza
+        // Caminho completo da aula (com o módulo). Fallback: título da página.
+        const dados = (await dadosDaAulaAtual()) || obterDadosDaPagina();
 
-        // Envia para o nosso servidor Python
-        fetch('http://localhost:5000/baixar', {
+        fetch(SERVIDOR, {
             method: 'POST',
-            headers: {'Content-Type': 'application/json'},
-            body: JSON.stringify({
-                url: urlEmbed,
-                folder: dados.folder,
-                filename: dados.filename
-            })
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ url: urlEmbed, folder: dados.folder, filename: dados.filename }),
         })
         .then(r => r.json())
-        .then(d => {
-            // Feedback Visual: "Sucesso"
-            btn.innerText = '⏳ Na Fila';
-            btn.style.backgroundColor = '#3498db'; // Azul
-            
-            // Volta ao normal depois de 4 segundos
-            setTimeout(() => {
-                btn.innerText = '⬇ Baixar Aula';
-                btn.style.backgroundColor = ''; // Remove cor inline para voltar ao CSS original
-            }, 4000);
-        })
+        .then(() => { btn._lab.textContent = 'Na fila'; })
         .catch(err => {
-            console.error("Erro ao conectar com servidor:", err);
-            btn.innerText = '❌ Erro (Servidor Offline?)';
-            btn.style.backgroundColor = '#e74c3c'; // Vermelho
+            console.error('[Loom] servidor offline?', err);
+            btn.classList.add('sf-pill--err');
+            btn._lab.textContent = 'Servidor offline?';
+        })
+        .finally(() => {
+            setTimeout(() => {
+                btn.disabled = false;
+                btn.classList.remove('sf-pill--err');
+                btn._lab.textContent = 'Baixar aula';
+            }, 4000);
         });
     };
 
-    // Insere o botão logo antes do iframe do vídeo
+    // Insere o pill logo antes do iframe do vídeo
     iframe.parentNode.insertBefore(btn, iframe);
 }
 
-// --- 2.5. BOTÃO "BAIXAR CURSO INTEIRO" ---
+// --- 2.5. PONTE COM O POPUP (central de controle) ---
+// O botão de "curso inteiro" saiu da página (design Sifão) e virou uma ação do
+// popup. Aqui só expomos, por mensagem, o CONTEXTO do curso e o disparo do
+// enfileiramento — que roda no content script e PERSISTE mesmo se o popup fechar.
 
-function criarBotaoCurso() {
-    if (document.querySelector('.botao-curso-inteiro')) return;   // já existe
-    // Só faz sentido numa página de classroom com dados de curso.
-    if (!document.getElementById('__NEXT_DATA__')) return;
-    if (!/\/classroom\//.test(location.pathname)) return;
+async function enfileirarCursoDaAba(aoProgredir) {
+    if (enfileirandoEmAndamento) return { ok: false, motivo: 'ocupado' };
+    const aulas = await coletarAulasDoCurso();
+    if (!aulas.length) return { ok: false, motivo: 'vazio' };   // vazio ou cache velho (F5)
 
-    const btn = document.createElement('button');
-    btn.className = 'botao-curso-inteiro';
-    btn.innerText = '📚 Baixar curso inteiro';
-    document.body.appendChild(btn);
-
-    btn.onclick = async () => {
-        if (btn.disabled) return;   // já enfileirando; ignora cliques repetidos
-
-        const aulas = await coletarAulasDoCurso();
-        if (!aulas.length) {
-            // Pode ser curso realmente vazio OU dados desatualizados (ver console).
-            btn.innerText = '❌ Nada encontrado — recarregue (F5)';
-            setTimeout(() => { btn.innerText = '📚 Baixar curso inteiro'; }, 4000);
-            return;
-        }
-
+    enfileirandoEmAndamento = true;   // ativa o guarda beforeunload
+    const ctx = obterContexto();
+    try {
         const comVideo = aulas.filter(a => a._temVideo).length;
-        const soTexto = aulas.length - comVideo;
-
-        // Log informativo — dá para conferir os caminhos no console se quiser,
-        // mas NÃO é mais uma trava: o download dispara na mesma ação.
-        // A coluna 'texto' mostra se desc/resources foram capturados: uma aula de
-        // texto que apareça com texto='—' aponta o problema direto ao campo.
         console.log(`[Loom] === ${aulas.length} aulas ` +
-                    `(${comVideo} com vídeo, ${soTexto} sem vídeo) ===`);
-        console.table(aulas.map(a => ({
-            pasta: a.folder,
-            arquivo: a.filename,
-            tipo: a._unitType,
-            video: a._temVideo ? 'sim' : '—',
-            texto: a._temTexto ? 'sim' : '—',
-        })));
-
-        // Uma única confirmação antes de disparar downloads em massa.
-        const ok = confirm(
-            `Baixar o curso inteiro?\n\n` +
-            `${aulas.length} aulas — ${comVideo} com vídeo, ${soTexto} só texto.\n` +
-            `Isso vai enfileirar ${aulas.length} pedidos no servidor local (localhost:5000).`
-        );
-        if (!ok) {
-            btn.innerText = '📚 Baixar curso inteiro';
-            return;
-        }
-
-        // Confirmado: dispara os POSTs. Busca o texto de cada aula em paralelo
-        // com o enfileiramento (o desc só vem no JSON da aula aberta).
-        btn.disabled = true;
-        enfileirandoEmAndamento = true;   // ativa o guarda beforeunload
-        const ctx = obterContexto();
-        let enviadas = 0;
-        try {
-            enviadas = await enfileirarCurso(aulas, ctx, (fase, i, n) => {
-                btn.innerText = fase === 'texto'
-                    ? `📝 Lendo textos ${i}/${n}...`
-                    : `📡 Enfileirando ${i}/${n}...`;
-            });
-        } finally {
-            enfileirandoEmAndamento = false;   // libera mesmo se algo falhar no meio
-        }
-        btn.innerText = `⏳ ${enviadas} aulas na fila — veja o terminal`;
-        setTimeout(() => {
-            btn.disabled = false;
-            btn.innerText = '📚 Baixar curso inteiro';
-        }, 6000);
-    };
+                    `(${comVideo} com vídeo, ${aulas.length - comVideo} sem vídeo) ===`);
+        const enviadas = await enfileirarCurso(aulas, ctx, aoProgredir);
+        return { ok: true, enviadas };
+    } finally {
+        enfileirandoEmAndamento = false;   // libera mesmo se algo falhar no meio
+    }
 }
+
+chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
+    if (!msg || !msg.tipo) return;
+    if (msg.tipo === 'sifao:contextoCurso') {
+        contextoCurso().then(sendResponse).catch(() => sendResponse({ ok: false }));
+        return true;   // resposta assíncrona
+    }
+    if (msg.tipo === 'sifao:baixarCurso') {
+        // Progresso vai pro popup (se ainda aberto); o enfileiramento roda aqui.
+        enfileirarCursoDaAba((fase, i, n) => {
+            try { chrome.runtime.sendMessage({ tipo: 'sifao:progresso', fase, i, n }); } catch (e) {}
+        }).then(sendResponse).catch(() => sendResponse({ ok: false, motivo: 'erro' }));
+        return true;
+    }
+});
 
 // --- 2.6. BOTÃO DE VÍDEO VIMEO (posts de comunidade) ---
 // O player do Vimeo é um blob (MediaSource) — não dá pra baixar direto. Mas o
@@ -594,21 +595,42 @@ function acharVimeoId() {
     return null;
 }
 
+function acharVimeoIframe() {
+    for (const f of document.querySelectorAll('iframe')) {
+        if (f.src && /player\.vimeo\.com/.test(f.src)) return f;
+    }
+    return null;
+}
+
+function ancorarPillNoIframe(btn, iframe) {
+    btn.classList.remove('sf-pill--fixed');
+    btn.classList.add('sf-pill--overlay');
+    if (getComputedStyle(iframe.parentNode).position === 'static') iframe.parentNode.style.position = 'relative';
+    iframe.parentNode.insertBefore(btn, iframe);
+}
+
 function criarBotaoVimeo() {
-    if (document.querySelector('.botao-vimeo')) return;   // já existe
     const id = acharVimeoId();
     if (!id) return;
+    const iframe = acharVimeoIframe();
 
-    const btn = document.createElement('button');
-    btn.className = 'botao-vimeo';
-    btn.innerText = '⬇ Baixar vídeo (Vimeo)';
-    document.body.appendChild(btn);
+    // Se o botão já existe e nasceu no canto (o iframe do Vimeo carregou DEPOIS, pois
+    // o id foi detectado pela Performance API antes do iframe entrar no DOM),
+    // reancora sobre o vídeo assim que o iframe aparecer.
+    const existente = document.getElementById('sf-vimeo');
+    if (existente) {
+        if (iframe && existente.classList.contains('sf-pill--fixed')) ancorarPillNoIframe(existente, iframe);
+        return;
+    }
+
+    const btn = criarPill('Baixar vídeo', !iframe);   // overlay se já há iframe; senão canto
+    btn.id = 'sf-vimeo';
 
     btn.onclick = async () => {
         if (btn.disabled) return;
         btn.disabled = true;
-        btn.innerText = '📡 Enviando...';
-        const dados = obterDadosDaPagina();   // mesma lógica de pasta/nome do botão de aula
+        btn._lab.textContent = 'Enviando…';
+        const dados = (await dadosDaAulaAtual()) || obterDadosDaPagina();   // caminho completo (com módulo)
         try {
             const resp = await fetch(SERVIDOR, {
                 method: 'POST',
@@ -621,13 +643,88 @@ function criarBotaoVimeo() {
                 }),
             });
             await resp.json();
-            btn.innerText = '⏳ Na fila';
+            btn._lab.textContent = 'Na fila';
         } catch (e) {
             console.error('[Vimeo] servidor offline?', e);
-            btn.innerText = '❌ Servidor offline?';
+            btn.classList.add('sf-pill--err');
+            btn._lab.textContent = 'Servidor offline?';
         }
-        setTimeout(() => { btn.disabled = false; btn.innerText = '⬇ Baixar vídeo (Vimeo)'; }, 4000);
+        setTimeout(() => {
+            btn.disabled = false;
+            btn.classList.remove('sf-pill--err');
+            btn._lab.textContent = 'Baixar vídeo';
+        }, 4000);
     };
+
+    if (iframe) ancorarPillNoIframe(btn, iframe);
+    else document.body.appendChild(btn);
+}
+
+// --- 2.7. LOOM NATIVO (página do próprio loom.com/share|embed) ---
+// No Skool o Loom vem num iframe; direto no loom.com o vídeo é o player NATIVO da
+// página (sem iframe), então o botão de iframe não aparecia. Aqui detectamos a
+// página do Loom e ancoramos o pill sobre o <video>, mandando a URL de embed.
+
+function ehPaginaLoom() {
+    return /(^|\.)loom\.com$/.test(location.hostname) &&
+           /^\/(share|embed)\/[0-9a-f]{20,}/.test(location.pathname);
+}
+
+function idDaPaginaLoom() {
+    const m = location.pathname.match(/^\/(?:share|embed)\/([0-9a-f]{20,})/);
+    return m ? m[1] : null;
+}
+
+function criarBotaoLoomNativo() {
+    if (!ehPaginaLoom()) return;
+    if (document.getElementById('sf-loom')) return;
+    const id = idDaPaginaLoom();
+    if (!id) return;
+    const video = document.querySelector('video#LoomShakaVideoPlayer, video');
+    if (!video) return;
+
+    // O <video> e o wrapper imediato ficam 0×0 (o Loom desenha o quadro num canvas).
+    // Sobe até o primeiro ancestral COM tamanho: é o container visível do player.
+    let alvo = video.parentElement;
+    while (alvo && (alvo.offsetWidth === 0 || alvo.offsetHeight === 0)) alvo = alvo.parentElement;
+    if (!alvo) return;   // ainda sem layout; o observador tenta de novo
+
+    if (getComputedStyle(alvo).position === 'static') alvo.style.position = 'relative';
+
+    const btn = criarPill('Baixar vídeo', false);   // overlay sobre o vídeo
+    btn.id = 'sf-loom';
+
+    btn.onclick = async () => {
+        if (btn.disabled) return;
+        btn.disabled = true;
+        btn._lab.textContent = 'Enviando…';
+        const titulo = limparTexto(
+            document.title.replace(/\s*[|-]\s*Loom\s*$/i, '').trim() || 'Video Loom');
+        try {
+            const resp = await fetch(SERVIDOR, {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({
+                    url: `https://www.loom.com/embed/${id}`,   // mesmo caminho do embed no Skool
+                    folder: 'Loom',
+                    filename: titulo,
+                }),
+            });
+            await resp.json();
+            btn._lab.textContent = 'Na fila';
+        } catch (e) {
+            console.error('[Loom] servidor offline?', e);
+            btn.classList.add('sf-pill--err');
+            btn._lab.textContent = 'Servidor offline?';
+        }
+        setTimeout(() => {
+            btn.disabled = false;
+            btn.classList.remove('sf-pill--err');
+            btn._lab.textContent = 'Baixar vídeo';
+        }, 4000);
+    };
+
+    alvo.appendChild(btn);
 }
 
 // --- 3. OBSERVADORES (O VIGIA) ---
@@ -645,10 +742,10 @@ function iniciarObservador() {
                 criarBotaoDownload(iframe);
             }
         });
-        // Botão de curso inteiro (aparece em qualquer aula do classroom).
-        criarBotaoCurso();
         // Botão de vídeo Vimeo (posts de comunidade e afins).
         criarBotaoVimeo();
+        // Botão do Loom nativo (página do próprio loom.com/share|embed).
+        criarBotaoLoomNativo();
     });
     
     // Começa a vigiar o corpo da página
@@ -657,8 +754,8 @@ function iniciarObservador() {
 
 // Inicia o processo
 iniciarObservador();
-criarBotaoCurso();
 criarBotaoVimeo();
+criarBotaoLoomNativo();
 
 // Guarda contra perder aulas: se o usuário recarregar ou fechar a aba ENQUANTO o
 // curso está sendo enfileirado, o navegador mostra o aviso nativo de "sair da
