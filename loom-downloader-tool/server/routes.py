@@ -16,6 +16,7 @@ from services import (
     baixar_youtube,
     eh_url_youtube,
     titulo_do_youtube,
+    canal_do_youtube,
     baixar_vimeo,
     eh_url_vimeo,
     titulo_do_vimeo,
@@ -63,6 +64,16 @@ def worker_download(url, pasta_destino, nome_arquivo_sugerido, item_dashboard,
     # Limpa caracteres proibidos (ex: remove "?", "/", ":")
     nome_limpo = limpar_nome_arquivo(nome_arquivo_sugerido)
     item_dashboard['nome'] = nome_limpo  # Atualiza o nome bonitinho no painel
+
+    # YouTube: organiza por canal — output/YouTube/<Canal>/<Titulo>.mp4, a mesma
+    # logica de pastas do Skool. O canal vem do proprio yt-dlp, entao vale para
+    # qualquer entrada (botao na pagina, popup ou link colado). Se o canal nao
+    # resolver, grava direto na pasta raiz (sem subpasta), sem quebrar nada.
+    if url and eh_url_youtube(url):
+        canal = canal_do_youtube(url)
+        if canal:
+            pasta_destino = os.path.join(pasta_destino, limpar_nome_arquivo(canal))
+            item_dashboard['folder'] = pasta_destino
 
     # Define onde ficarão os arquivos temporários (.ts)
     caminho_pasta_temp = os.path.join(PASTA_TEMP_RAIZ, nome_limpo)

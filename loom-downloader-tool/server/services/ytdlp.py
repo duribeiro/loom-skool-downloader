@@ -65,6 +65,26 @@ def titulo_via_ytdlp(url, referer=None):
         return "video"
 
 
+def canal_via_ytdlp(url, referer=None):
+    """Nome do canal/uploader do vídeo, para organizar em pastas (YouTube/<Canal>/).
+
+    Metadados apenas (sem baixar). Devolve '' se falhar — o chamador então grava
+    direto na pasta raiz, sem subpasta de canal. Nunca estoura.
+    """
+    opcoes = {"quiet": True, "no_warnings": True, "skip_download": True}
+    cabecalhos = _headers(referer)
+    if cabecalhos:
+        opcoes["http_headers"] = cabecalhos
+    try:
+        with yt_dlp.YoutubeDL(opcoes) as ydl:
+            info = ydl.extract_info(url, download=False)
+        info = info or {}
+        return info.get("channel") or info.get("uploader") or ""
+    except Exception as erro:
+        print(f"⚠️  Não consegui o canal ({type(erro).__name__}); sem subpasta de canal.")
+        return ""
+
+
 def baixar_com_ytdlp(url, pasta_relativa_destino, nome_arquivo, callback=None, referer=None):
     """Baixa um vídeo na melhor qualidade em .mp4 via yt-dlp.
 

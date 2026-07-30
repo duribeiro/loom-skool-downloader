@@ -3,7 +3,7 @@
 A lógica de download mora em `ytdlp.py` (compartilhada com o Vimeo). Aqui só fica o
 que é específico do YouTube.
 """
-from .ytdlp import baixar_com_ytdlp, titulo_via_ytdlp
+from .ytdlp import baixar_com_ytdlp, titulo_via_ytdlp, canal_via_ytdlp
 
 
 def eh_url_youtube(url):
@@ -22,3 +22,8 @@ def baixar_youtube(url, pasta_relativa_destino, nome_arquivo, callback=None):
 def titulo_do_youtube(url):
     """Título do vídeo do YouTube (para quando o pedido vem sem nome)."""
     return titulo_via_ytdlp(url)
+
+
+def canal_do_youtube(url):
+    """Nome do canal do YouTube — para organizar em output/YouTube/<Canal>/."""
+    return canal_via_ytdlp(url)
