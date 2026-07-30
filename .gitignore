@@ -17,3 +17,8 @@ trash/
 
 # Ignorar arquivos de configuração do VS Code (opcional, mas recomendado)
 .vscode/
+# Cache do pytest
+.pytest_cache/
+
+# Crash dumps do Git Bash
+*.stackdump

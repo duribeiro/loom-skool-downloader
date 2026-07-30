@@ -1,0 +1,40 @@
+/* Sifão — design system compartilhado (Skool/Loom/Vimeo + YouTube).
+   Fonte: docs/design-system/README.md.
+   Um componente único de download (pill) usado sobre qualquer player. */
+
+.sf-pill{
+  z-index:2147483000;
+  display:inline-flex; align-items:center; gap:8px;
+  padding:9px 15px; border-radius:999px;
+  border:1px solid rgba(255,255,255,.16);
+  background:linear-gradient(180deg,#4a83ff,#2f6bff);
+  color:#fff; font-weight:650; font-size:13.5px; line-height:1;
+  font-family:"Segoe UI",system-ui,-apple-system,Roboto,Helvetica,Arial,sans-serif;
+  cursor:pointer; box-shadow:0 6px 16px rgba(10,20,50,.35);
+  transition:filter .15s ease, transform .15s ease, box-shadow .15s ease;
+}
+.sf-pill:hover{ filter:brightness(1.07); transform:translateY(-1px); box-shadow:0 8px 20px rgba(10,20,50,.42); }
+.sf-pill:active{ transform:translateY(0); }
+.sf-pill:disabled{ opacity:.8; cursor:default; transform:none; }
+.sf-pill:focus-visible{ outline:2px solid #fff; outline-offset:2px; }
+
+/* Ícone da marca (seta sobre bandeja) — branco, embutido como SVG data URI. */
+.sf-pill__ico{
+  width:15px; height:15px; flex:none; display:block;
+  background:center/contain no-repeat
+    url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none'%3E%3Cpath d='M12 4v9.5' stroke='%23fff' stroke-width='2.4' stroke-linecap='round'/%3E%3Cpath d='M7.5 9.8 12 14.3l4.5-4.5' stroke='%23fff' stroke-width='2.4' stroke-linecap='round' stroke-linejoin='round'/%3E%3Cpath d='M6 19h12' stroke='%23fff' stroke-width='2.4' stroke-linecap='round'/%3E%3C/svg%3E");
+}
+.sf-pill__label{ white-space:nowrap; }
+
+/* Posições: overlay = canto do vídeo; fixed = canto da tela (fallback). */
+.sf-pill--overlay{ position:absolute; top:12px; right:12px; }
+.sf-pill--fixed{ position:fixed; bottom:20px; right:20px; }
+
+/* Estados semânticos (separados do acento). */
+.sf-pill--err{ background:linear-gradient(180deg,#ff6b6b,#ff5a5a); }
+.sf-pill--ok{ background:linear-gradient(180deg,#2fcf7e,#25c26e); }
+
+@media (prefers-reduced-motion: reduce){
+  .sf-pill{ transition:none; }
+  .sf-pill:hover{ transform:none; }
+}

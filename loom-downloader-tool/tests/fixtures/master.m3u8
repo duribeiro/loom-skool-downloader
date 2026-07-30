@@ -1,0 +1,7 @@
+#EXTM3U
+#EXT-X-VERSION:3
+#EXT-X-MEDIA:TYPE=AUDIO,GROUP-ID="audio",NAME="audio",DEFAULT="YES",URI="mediaplaylist-audio.m3u8"
+#EXT-X-STREAM-INF:BANDWIDTH=1500000,RESOLUTION=1272x720,AUDIO="audio"
+mediaplaylist-video-bitrate1500.m3u8
+#EXT-X-STREAM-INF:BANDWIDTH=3200000,RESOLUTION=1910x1080,AUDIO="audio"
+mediaplaylist-video-bitrate3200.m3u8

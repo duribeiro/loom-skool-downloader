@@ -1,6 +1,7 @@
 // --- CONFIGURAÇÃO ---
 let observadorDeMudancas = null;
 let ultimaUrlRegistrada = "";
+let enfileirandoEmAndamento = false;   // trava o beforeunload enquanto envia o curso
 
 // --- 1. FUNÇÕES AUXILIARES ---
 
@@ -87,65 +88,643 @@ function obterDadosDaPagina() {
     };
 }
 
-// --- 2. INJEÇÃO DO BOTÃO ---
+// --- 1.5. CRAWLER DO CURSO INTEIRO ---
+// Lê o __NEXT_DATA__ do Skool (JSON de SSR do Next.js, presente no DOM) e monta
+// a lista de TODAS as aulas do curso de uma vez. Não precisa navegar aula a aula.
+
+const SERVIDOR = 'http://localhost:5000/baixar';
+
+function obterNextData() {
+    // __NEXT_DATA__ é uma tag <script> no DOM — o content script alcança.
+    const tag = document.getElementById('__NEXT_DATA__');
+    if (!tag) return null;
+    try {
+        return JSON.parse(tag.textContent);
+    } catch (e) {
+        console.error('[Loom] __NEXT_DATA__ não é JSON válido:', e);
+        return null;
+    }
+}
+
+// Containers da árvore do curso: dão o CAMINHO (Curso/Módulo), não viram aula.
+// Todo o resto é folha = aula, seja qual for o unitType (module, page, article...).
+// Isso honra a intenção documentada: "nenhuma aula do curso é omitida".
+const CONTAINERS = new Set(['course', 'set']);
+
+function metaDe(no) {
+    // O Skool às vezes entrega metadata como objeto, às vezes como string JSON.
+    // Normaliza para objeto; devolve null se não der para aproveitar.
+    if (!no) return null;
+    const m = no.metadata;
+    if (m && typeof m === 'object') return m;
+    if (typeof m === 'string' && m) {
+        try { return JSON.parse(m); } catch (e) { return null; }
+    }
+    return null;
+}
+
+// O texto da aula ("desc") é uma string que começa com "[v2]" (rich-text do
+// Skool). Os recursos ("resources") são um JSON array de {title, link}.
+// Ancoramos a busca nesses invariantes MEDIDOS — não no nome/lugar do campo,
+// que varia. Assim o texto é capturado mesmo que o Skool o aninhe diferente.
+function pareceDesc(v) {
+    return typeof v === 'string' && v.startsWith('[v2]');
+}
+
+function pareceResources(v) {
+    if (typeof v !== 'string') return false;
+    const t = v.trim();
+    if (!t.startsWith('[')) return false;
+    try {
+        const arr = JSON.parse(t);
+        return Array.isArray(arr) && arr.length > 0 &&
+               arr.some(i => i && typeof i === 'object' && (i.link || i.title));
+    } catch (e) { return false; }
+}
+
+function buscarNaUnit(unit, aceita, profMax = 6) {
+    // Busca DENTRO da própria unit, sem descer para OUTRA unit (id diferente),
+    // para nunca pegar o texto de uma aula vizinha.
+    let achado = '';
+    (function anda(no, prof) {
+        if (achado || !no || typeof no !== 'object' || prof > profMax) return;
+        if (Array.isArray(no)) { for (const x of no) { anda(x, prof + 1); if (achado) return; } return; }
+        for (const k of Object.keys(no)) { if (aceita(no[k])) { achado = no[k]; return; } }
+        for (const k of Object.keys(no)) {
+            const v = no[k];
+            if (!v || typeof v !== 'object') continue;
+            // não cruzar a fronteira para outra unit do curso
+            if (v !== unit && typeof v.id === 'string' && v.unitType && v.id !== unit.id) continue;
+            anda(v, prof + 1);
+            if (achado) return;
+        }
+    })(unit, 0);
+    return achado;
+}
+
+function coletarUnits(raiz) {
+    // Travessia genérica: junta todo objeto que seja um "unit" do Skool
+    // (id + unitType + metadata), sem depender de como o Skool aninha.
+    const porId = {};
+    const vistos = new Set();
+    (function anda(no) {
+        if (!no || typeof no !== 'object') return;
+        if (Array.isArray(no)) { no.forEach(anda); return; }
+        if (typeof no.id === 'string' && no.unitType && metaDe(no)) {
+            if (!vistos.has(no.id)) { vistos.add(no.id); porId[no.id] = no; }
+        }
+        for (const k of Object.keys(no)) anda(no[k]);
+    })(raiz);
+    return porId;
+}
+
+function caminhoDaAula(unit, porId) {
+    // Sobe pela cadeia parentId: os 'set' viram Módulos; o 'course' vira Curso.
+    const modulos = [];
+    let curso = null;
+    let atual = porId[unit.parentId];
+    let guarda = 0;
+    while (atual && guarda++ < 20) {
+        const m = metaDe(atual) || {};
+        if (atual.unitType === 'course') { curso = m.title; break; }
+        if (atual.unitType === 'set') modulos.unshift(m.title);
+        atual = porId[atual.parentId];
+    }
+    return { curso, modulos };
+}
+
+function slugsDaUrl() {
+    // Na rota /[group]/classroom/[course], os slugs vêm direto do caminho ATUAL.
+    // Isso reflete a aula/curso na tela AGORA, mesmo após navegação SPA — ao
+    // contrário do __NEXT_DATA__, que fica preso ao curso do primeiro load.
+    const partes = location.pathname.split('/');
+    return { group: partes[1] || '', course: partes[3] || '' };
+}
+
+async function obterPagePropsDoCurso() {
+    // BUG DA NAVEGAÇÃO SPA: o __NEXT_DATA__ é o SSR do PRIMEIRO carregamento e não
+    // se atualiza quando o Skool troca de curso sem recarregar. Ler dele enfileirava
+    // o curso ANTIGO (só um F5 corrigia). Aqui buscamos o JSON do curso ATUAL (pela
+    // URL) no mesmo endpoint que o Skool usa internamente — o mesmo já usado para o
+    // texto por aula, então roda com a sessão do usuário e é comprovadamente autorizado.
+    const nd = obterNextData();
+    const buildId = nd && nd.buildId;
+    const { group, course } = slugsDaUrl();
+    if (buildId && group && course) {
+        // Inclui o md atual da URL quando houver: deixa o request idêntico ao que o
+        // Skool faz ao abrir a aula (o mesmo já comprovado em buscarTextoDaAula).
+        // A árvore de aulas não depende do md — ele só marca o módulo selecionado.
+        const mdAtual = new URLSearchParams(location.search).get('md');
+        let q = `group=${encodeURIComponent(group)}&course=${encodeURIComponent(course)}`;
+        if (mdAtual) q += `&md=${encodeURIComponent(mdAtual)}`;
+        const url = `${location.origin}/_next/data/${buildId}/${group}/classroom/${course}.json?${q}`;
+        try {
+            const r = await fetch(url, { credentials: 'include', headers: { 'x-nextjs-data': '1' } });
+            if (r.ok) {
+                const json = await r.json();
+                const pp = json.pageProps || (json.props && json.props.pageProps);
+                if (pp && pp.course) return pp;
+                console.warn('[Loom] JSON fresco do curso sem pageProps.course; tentando cache local.');
+            } else {
+                console.warn(`[Loom] _next/data ${r.status} ao buscar curso atual; tentando cache local.`);
+            }
+        } catch (e) {
+            console.warn('[Loom] falha ao buscar curso fresco; tentando cache local:', e);
+        }
+    }
+    // Fallback: só confia no __NEXT_DATA__ se ele for COMPROVADAMENTE do curso ATUAL
+    // (o slug `name` bate com o da URL). Se não bater — ou não houver slug na URL — o
+    // cache está velho (navegação SPA para outro curso): enfileirá-lo mandaria o curso
+    // ERRADO, que é justamente o bug que esta função corrige. Nesse caso, abortamos.
+    const ppLocal = nd && nd.props && nd.props.pageProps;
+    const nomeLocal = ppLocal && ppLocal.course && ppLocal.course.course && ppLocal.course.course.name;
+    if (course && ppLocal && ppLocal.course && nomeLocal === course) {
+        return ppLocal;
+    }
+    console.warn('[Loom] Sem dados frescos do curso e cache desatualizado — recarregue a página (F5).');
+    return null;
+}
+
+async function coletarAulasDoCurso() {
+    const pp = await obterPagePropsDoCurso();
+    if (!pp || !pp.course) {
+        console.warn('[Loom] Não achei os dados do curso nesta página.');
+        return [];
+    }
+    return extrairAulas(pp);
+}
+
+async function contextoCurso() {
+    // Para o popup (central de controle): título e nº de aulas do curso da aba atual.
+    const pp = await obterPagePropsDoCurso();
+    if (!pp || !pp.course) return { ok: false };
+    const meta = (pp.course.course && metaDe(pp.course.course)) || {};
+    return { ok: true, title: meta.title || 'Curso', count: extrairAulas(pp).length };
+}
+
+function extrairAulas(pp) {
+    // Nome "bonito" da comunidade (ex: BACKROOM.EXE), não o slug (backroomexe-3259).
+    // O displayName é o mesmo que o botão de aula individual usa (via document.title),
+    // então os dois botões gravam na MESMA pasta de comunidade.
+    const cg = pp.currentGroup || {};
+    const comunidade = (cg.metadata && cg.metadata.displayName) || cg.name || 'Skool';
+    const porId = coletarUnits(pp.course);
+
+    // Diagnóstico: quantos units de cada unitType existem. Se uma aula "não baixa",
+    // isto revela na hora se ela era de um tipo que estávamos descartando.
+    const porTipo = {};
+    for (const u of Object.values(porId)) porTipo[u.unitType] = (porTipo[u.unitType] || 0) + 1;
+    console.log('[Loom] unitTypes encontrados:', porTipo);
+
+    const aulas = [];
+    for (const unit of Object.values(porId)) {
+        // Containers (course/set) só dão o caminho — não viram aula.
+        // Todo o resto é folha e ENTRA, seja qual for o unitType: assim uma aula
+        // de texto (unitType diferente de 'module') não some em silêncio.
+        if (CONTAINERS.has(unit.unitType)) continue;
+
+        const meta = metaDe(unit) || {};
+        const videoLink = meta.videoLink || '';
+        const ehLoom = /loom\.com\/(embed|share)\//.test(videoLink);
+        const ehYoutube = /(youtube\.com|youtu\.be)/.test(videoLink);
+        const ehVideo = ehLoom || ehYoutube;   // o servidor roteia Loom vs YouTube
+
+        // Texto/recursos: tenta o campo direto; se vazio, busca dentro da unit
+        // por uma string "[v2]" (desc) ou um array de recursos. Ancorado nos
+        // invariantes medidos, não no nome do campo.
+        let desc = meta.desc || '';
+        if (!desc) desc = buscarNaUnit(unit, pareceDesc);
+        let resources = meta.resources || '';
+        if (!pareceResources(resources)) {
+            const r = buscarNaUnit(unit, pareceResources);
+            if (r) resources = r;
+        }
+        const temTexto = !!(desc || (resources && resources !== '[]'));
+
+        // Inclui TODA aula do curso — inclusive as vazias (sem vídeo nem texto).
+        // O servidor grava um .md placeholder para elas, para que nenhuma aula
+        // suma sem aviso. Só aulas com vídeo de OUTRA plataforma (YouTube etc.)
+        // seguem sem o .mp4 — mas o texto/registro ainda vai.
+
+        const { curso, modulos } = caminhoDaAula(unit, porId);
+        const pasta = [comunidade, curso, ...modulos]
+            .filter(Boolean)
+            .map(limparTexto)
+            .join('/');
+
+        aulas.push({
+            url: ehVideo ? videoLink : '',
+            folder: pasta,
+            filename: limparTexto(meta.title || 'Aula sem titulo'),
+            desc: desc,
+            resources: resources,
+            _temVideo: ehVideo,
+            _temTexto: temTexto,
+            _unitType: unit.unitType,
+            _id: unit.id,   // = o "md" da aula; usado para buscar o texto individual
+        });
+    }
+    return aulas;
+}
+
+// --- 1.6. TEXTO POR AULA (via endpoint de dados do Next.js do Skool) ---
+// O __NEXT_DATA__ só traz o `desc` da aula ABERTA. Para pegar o texto das
+// demais, buscamos o JSON de cada aula no mesmo endpoint que o Skool usa ao
+// trocar de aula: /_next/data/<buildId>/<group>/classroom/<course>.json?md=<id>
+// A extensão roda com a sessão do usuário (cookies), então o fetch é autorizado.
+
+function obterContexto() {
+    // buildId sai do __NEXT_DATA__ (estável em todo o app, não muda entre cursos).
+    // group/course vêm da URL ATUAL — não do nd.query, que fica preso ao primeiro
+    // load e apontava para o curso ERRADO após navegação SPA.
+    const nd = obterNextData();
+    const { group, course } = slugsDaUrl();
+    return { buildId: nd && nd.buildId, group, course };
+}
+
+function extrairTextoParaMd(pp, md) {
+    // No JSON buscado para md=X, a aula X é a "aberta" e carrega o desc completo.
+    // Atribui SEMPRE pelo id (id === md) para nunca misturar com aula vizinha.
+    if (!pp || !md) return { desc: '', resources: '' };
+    const porId = coletarUnits(pp.course || pp);
+    const unit = porId[md];
+    if (!unit) return { desc: '', resources: '' };
+    const meta = metaDe(unit) || {};
+    const desc = pareceDesc(meta.desc) ? meta.desc : (buscarNaUnit(unit, pareceDesc) || (meta.desc || ''));
+    const resources = pareceResources(meta.resources) ? meta.resources : (buscarNaUnit(unit, pareceResources) || '');
+    return { desc, resources };
+}
+
+async function buscarTextoDaAula(md, ctx) {
+    if (!md || !ctx || !ctx.buildId || !ctx.group || !ctx.course) return { desc: '', resources: '' };
+    const q = `md=${encodeURIComponent(md)}&group=${encodeURIComponent(ctx.group)}` +
+              `&course=${encodeURIComponent(ctx.course)}`;
+    const url = `${location.origin}/_next/data/${ctx.buildId}/${ctx.group}/classroom/${ctx.course}.json?${q}`;
+    try {
+        const r = await fetch(url, { credentials: 'include', headers: { 'x-nextjs-data': '1' } });
+        if (!r.ok) { console.warn(`[Loom] _next/data ${r.status} para md ${md}`); return { desc: '', resources: '' }; }
+        const json = await r.json();
+        const pp = json.pageProps || (json.props && json.props.pageProps);
+        return extrairTextoParaMd(pp, md);
+    } catch (e) {
+        console.warn(`[Loom] falha ao buscar texto da aula ${md}:`, e);
+        return { desc: '', resources: '' };
+    }
+}
+
+// Executa `fn` sobre `itens` com no máximo `limite` em voo ao mesmo tempo.
+// A concorrência limitada é o "respiro": rápida o bastante para fechar o curso
+// inteiro em ~1-2s, sem disparar N requests de uma vez contra o Skool/servidor.
+async function mapConcorrente(itens, limite, fn) {
+    let i = 0;
+    const trabalhadores = [];
+    for (let w = 0; w < Math.min(limite, itens.length); w++) {
+        trabalhadores.push((async () => {
+            while (i < itens.length) {
+                const idx = i++;
+                await fn(itens[idx], idx);
+            }
+        })());
+    }
+    await Promise.all(trabalhadores);
+}
+
+async function enfileirarCurso(aulas, ctx, aoProgredir) {
+    // BUG DO ENFILEIRAMENTO PERDIDO: antes isto era um loop SEQUENCIAL com 400ms de
+    // espera por aula. Um curso grande levava dezenas de segundos e, se a página
+    // recarregasse ou navegasse no meio, as aulas ainda não enviadas eram PERDIDAS —
+    // o loop morria junto com o content script. Agora capturamos os textos e
+    // disparamos os POSTs com concorrência limitada, fechando tudo em poucos segundos.
+    // Combinado com o guarda `beforeunload`, um reload deixa de perder aulas.
+    const n = aulas.length;
+    let enviadas = 0, textos = 0, comTexto = 0;
+
+    // Fase 1: captura o texto de cada aula (o desc só vem no JSON da aula aberta).
+    // Contra o Skool, mantemos concorrência BAIXA + um respiro por request: o antigo
+    // loop espaçava 400ms de propósito ("não floodar"); aqui preservamos essa proteção
+    // (senão N fetches em rajada podem levar 429 e perder o texto em silêncio).
+    const CONC_TEXTO = 4, RESPIRO_MS = 200;
+    await mapConcorrente(aulas, CONC_TEXTO, async (aula) => {
+        if (!aula.desc && aula._id && ctx && ctx.buildId) {
+            const t = await buscarTextoDaAula(aula._id, ctx);
+            if (t.desc) aula.desc = t.desc;
+            if (t.resources && !pareceResources(aula.resources)) aula.resources = t.resources;
+            await new Promise(r => setTimeout(r, RESPIRO_MS));   // respiro anti-flood
+        }
+        if (aula.desc || pareceResources(aula.resources)) comTexto++;
+        textos++;
+        if (aoProgredir) aoProgredir('texto', textos, n);
+    });
+
+    // Fase 2: envia os pedidos ao servidor LOCAL. Cada POST é independente e o servidor
+    // responde na hora, fazendo o próprio enfileiramento (ThreadPoolExecutor). É
+    // localhost, então concorrência maior é segura e não precisa de respiro.
+    const CONC_ENVIO = 6;
+    await mapConcorrente(aulas, CONC_ENVIO, async (aula) => {
+        try {
+            await fetch(SERVIDOR, {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({
+                    url: aula.url,
+                    folder: aula.folder,
+                    filename: aula.filename,
+                    desc: aula.desc,
+                    resources: aula.resources,
+                }),
+            });
+        } catch (err) {
+            console.error(`[Loom] Falha ao enfileirar "${aula.filename}":`, err);
+        }
+        enviadas++;
+        if (aoProgredir) aoProgredir('envio', enviadas, n);
+    });
+
+    console.log(`[Loom] textos capturados: ${comTexto}/${n} aulas`);
+    return enviadas;
+}
+
+// --- 2. COMPONENTE DE DOWNLOAD (pill unificado) ---
+
+// Fábrica do pill: mesmo visual em Loom e Vimeo (o youtube.js tem a sua, idêntica).
+// O ícone vem do ui.css (.sf-pill__ico); o texto fica num span para trocar o
+// rótulo/estado sem perder o ícone. `fixo` = canto da tela; senão overlay no vídeo.
+function criarPill(rotulo, fixo) {
+    const btn = document.createElement('button');
+    btn.className = 'sf-pill ' + (fixo ? 'sf-pill--fixed' : 'sf-pill--overlay');
+    const ico = document.createElement('span');
+    ico.className = 'sf-pill__ico';
+    const lab = document.createElement('span');
+    lab.className = 'sf-pill__label';
+    lab.textContent = rotulo;
+    btn.append(ico, lab);
+    btn._lab = lab;   // atalho p/ atualizar o texto de estado
+    return btn;
+}
+
+// Caminho REAL da aula ABERTA (Comunidade/Curso/Módulo), o MESMO que o "curso
+// inteiro" usa. Sem isto, o botão individual montava a pasta pelo document.title —
+// que não traz o módulo — e a aula caía fora da subpasta (ex.: solta em AGENTES
+// NEURAIS em vez de AGENTES NEURAIS/Nivelamento), sem deduplicar a cópia já baixada.
+// Devolve null quando não dá pra resolver (ex.: loom.com fora do Skool) — aí o
+// chamador cai no obterDadosDaPagina() antigo.
+async function dadosDaAulaAtual() {
+    const md = new URLSearchParams(location.search).get('md');
+    if (!md) return null;
+    const pp = await obterPagePropsDoCurso();
+    if (!pp || !pp.course) return null;
+    const porId = coletarUnits(pp.course);
+    const unit = porId[md];
+    if (!unit) return null;
+    const cg = pp.currentGroup || {};
+    const comunidade = (cg.metadata && cg.metadata.displayName) || cg.name || 'Skool';
+    const meta = metaDe(unit) || {};
+    const { curso, modulos } = caminhoDaAula(unit, porId);
+    const pasta = [comunidade, curso, ...modulos].filter(Boolean).map(limparTexto).join('/');
+    return { folder: pasta, filename: limparTexto(meta.title || 'Aula sem titulo') };
+}
 
 function criarBotaoDownload(iframe) {
-    // Evita criar dois botões no mesmo vídeo
-    if (iframe.parentNode.querySelector('.meu-botao-download')) return;
+    // Evita criar dois pills no mesmo vídeo
+    if (iframe.parentNode.querySelector('.sf-pill')) return;
 
-    // Garante que o container do vídeo tenha posição relativa
-    // (Isso é necessário para o botão "absolute" ficar preso ao vídeo, não à página)
+    // Garante que o container do vídeo tenha posição relativa (o overlay é absolute).
     if (getComputedStyle(iframe.parentNode).position === 'static') {
         iframe.parentNode.style.position = 'relative';
     }
 
-    const btn = document.createElement('button');
-    btn.innerText = '⬇ Baixar Aula';
-    btn.className = 'meu-botao-download'; // Estilizado no style.css
-    
-    // Adiciona o evento de clique
-    btn.onclick = (e) => {
+    const btn = criarPill('Baixar aula', false);
+
+    btn.onclick = async (e) => {
         e.preventDefault();
         e.stopPropagation();
+        if (btn.disabled) return;
 
-        const dados = obterDadosDaPagina(); 
         const urlEmbed = iframe.src;
+        btn.disabled = true;
+        btn._lab.textContent = 'Enviando…';
 
-        // Feedback Visual: "Processando..."
-        btn.innerText = '📡 ...';
-        btn.style.backgroundColor = '#95a5a6'; // Cinza
+        // Caminho completo da aula (com o módulo). Fallback: título da página.
+        const dados = (await dadosDaAulaAtual()) || obterDadosDaPagina();
 
-        // Envia para o nosso servidor Python
-        fetch('http://localhost:5000/baixar', {
+        fetch(SERVIDOR, {
             method: 'POST',
-            headers: {'Content-Type': 'application/json'},
-            body: JSON.stringify({
-                url: urlEmbed,
-                folder: dados.folder,
-                filename: dados.filename
-            })
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ url: urlEmbed, folder: dados.folder, filename: dados.filename }),
         })
         .then(r => r.json())
-        .then(d => {
-            // Feedback Visual: "Sucesso"
-            btn.innerText = '⏳ Na Fila';
-            btn.style.backgroundColor = '#3498db'; // Azul
-            
-            // Volta ao normal depois de 4 segundos
-            setTimeout(() => {
-                btn.innerText = '⬇ Baixar Aula';
-                btn.style.backgroundColor = ''; // Remove cor inline para voltar ao CSS original
-            }, 4000);
-        })
+        .then(() => { btn._lab.textContent = 'Na fila'; })
         .catch(err => {
-            console.error("Erro ao conectar com servidor:", err);
-            btn.innerText = '❌ Erro (Servidor Offline?)';
-            btn.style.backgroundColor = '#e74c3c'; // Vermelho
+            console.error('[Loom] servidor offline?', err);
+            btn.classList.add('sf-pill--err');
+            btn._lab.textContent = 'Servidor offline?';
+        })
+        .finally(() => {
+            setTimeout(() => {
+                btn.disabled = false;
+                btn.classList.remove('sf-pill--err');
+                btn._lab.textContent = 'Baixar aula';
+            }, 4000);
         });
     };
 
-    // Insere o botão logo antes do iframe do vídeo
+    // Insere o pill logo antes do iframe do vídeo
     iframe.parentNode.insertBefore(btn, iframe);
+}
+
+// --- 2.5. PONTE COM O POPUP (central de controle) ---
+// O botão de "curso inteiro" saiu da página (design Sifão) e virou uma ação do
+// popup. Aqui só expomos, por mensagem, o CONTEXTO do curso e o disparo do
+// enfileiramento — que roda no content script e PERSISTE mesmo se o popup fechar.
+
+async function enfileirarCursoDaAba(aoProgredir) {
+    if (enfileirandoEmAndamento) return { ok: false, motivo: 'ocupado' };
+    const aulas = await coletarAulasDoCurso();
+    if (!aulas.length) return { ok: false, motivo: 'vazio' };   // vazio ou cache velho (F5)
+
+    enfileirandoEmAndamento = true;   // ativa o guarda beforeunload
+    const ctx = obterContexto();
+    try {
+        const comVideo = aulas.filter(a => a._temVideo).length;
+        console.log(`[Loom] === ${aulas.length} aulas ` +
+                    `(${comVideo} com vídeo, ${aulas.length - comVideo} sem vídeo) ===`);
+        const enviadas = await enfileirarCurso(aulas, ctx, aoProgredir);
+        return { ok: true, enviadas };
+    } finally {
+        enfileirandoEmAndamento = false;   // libera mesmo se algo falhar no meio
+    }
+}
+
+chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
+    if (!msg || !msg.tipo) return;
+    if (msg.tipo === 'sifao:contextoCurso') {
+        contextoCurso().then(sendResponse).catch(() => sendResponse({ ok: false }));
+        return true;   // resposta assíncrona
+    }
+    if (msg.tipo === 'sifao:baixarCurso') {
+        // Progresso vai pro popup (se ainda aberto); o enfileiramento roda aqui.
+        enfileirarCursoDaAba((fase, i, n) => {
+            try { chrome.runtime.sendMessage({ tipo: 'sifao:progresso', fase, i, n }); } catch (e) {}
+        }).then(sendResponse).catch(() => sendResponse({ ok: false, motivo: 'erro' }));
+        return true;
+    }
+});
+
+// --- 2.6. BOTÃO DE VÍDEO VIMEO (posts de comunidade) ---
+// O player do Vimeo é um blob (MediaSource) — não dá pra baixar direto. Mas o
+// servidor baixa via yt-dlp SE receber a URL do player + o Referer da página.
+// Aqui a extensão descobre o id do vídeo e mostra o botão; o Referer = location.href.
+
+function acharVimeoId() {
+    // Junta candidatos: src dos iframes + tudo que a página já requisitou
+    // (Performance API pega o request do player e o do oembed, mesmo sem iframe visível).
+    const fontes = [];
+    for (const f of document.querySelectorAll('iframe')) {
+        if (f.src) fontes.push(f.src);
+    }
+    try {
+        for (const e of performance.getEntriesByType('resource')) fontes.push(e.name);
+    } catch (e) { /* Performance pode não estar disponível */ }
+
+    for (const s of fontes) {
+        // player.vimeo.com/video/12345  ou  ...oembed.json?url=...vimeo.com%2F12345
+        const m = s.match(/player\.vimeo\.com\/video\/(\d+)/) ||
+                  s.match(/vimeo\.com(?:%2F|\/)(\d{6,})/);
+        if (m) return m[1];
+    }
+    return null;
+}
+
+function acharVimeoIframe() {
+    for (const f of document.querySelectorAll('iframe')) {
+        if (f.src && /player\.vimeo\.com/.test(f.src)) return f;
+    }
+    return null;
+}
+
+function ancorarPillNoIframe(btn, iframe) {
+    btn.classList.remove('sf-pill--fixed');
+    btn.classList.add('sf-pill--overlay');
+    if (getComputedStyle(iframe.parentNode).position === 'static') iframe.parentNode.style.position = 'relative';
+    iframe.parentNode.insertBefore(btn, iframe);
+}
+
+function criarBotaoVimeo() {
+    const id = acharVimeoId();
+    if (!id) return;
+    const iframe = acharVimeoIframe();
+
+    // Se o botão já existe e nasceu no canto (o iframe do Vimeo carregou DEPOIS, pois
+    // o id foi detectado pela Performance API antes do iframe entrar no DOM),
+    // reancora sobre o vídeo assim que o iframe aparecer.
+    const existente = document.getElementById('sf-vimeo');
+    if (existente) {
+        if (iframe && existente.classList.contains('sf-pill--fixed')) ancorarPillNoIframe(existente, iframe);
+        return;
+    }
+
+    const btn = criarPill('Baixar vídeo', !iframe);   // overlay se já há iframe; senão canto
+    btn.id = 'sf-vimeo';
+
+    btn.onclick = async () => {
+        if (btn.disabled) return;
+        btn.disabled = true;
+        btn._lab.textContent = 'Enviando…';
+        const dados = (await dadosDaAulaAtual()) || obterDadosDaPagina();   // caminho completo (com módulo)
+        try {
+            const resp = await fetch(SERVIDOR, {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({
+                    url: `https://player.vimeo.com/video/${id}`,
+                    folder: dados.folder,
+                    filename: dados.filename,
+                    referer: location.href,   // libera o Vimeo restrito por domínio
+                }),
+            });
+            await resp.json();
+            btn._lab.textContent = 'Na fila';
+        } catch (e) {
+            console.error('[Vimeo] servidor offline?', e);
+            btn.classList.add('sf-pill--err');
+            btn._lab.textContent = 'Servidor offline?';
+        }
+        setTimeout(() => {
+            btn.disabled = false;
+            btn.classList.remove('sf-pill--err');
+            btn._lab.textContent = 'Baixar vídeo';
+        }, 4000);
+    };
+
+    if (iframe) ancorarPillNoIframe(btn, iframe);
+    else document.body.appendChild(btn);
+}
+
+// --- 2.7. LOOM NATIVO (página do próprio loom.com/share|embed) ---
+// No Skool o Loom vem num iframe; direto no loom.com o vídeo é o player NATIVO da
+// página (sem iframe), então o botão de iframe não aparecia. Aqui detectamos a
+// página do Loom e ancoramos o pill sobre o <video>, mandando a URL de embed.
+
+function ehPaginaLoom() {
+    return /(^|\.)loom\.com$/.test(location.hostname) &&
+           /^\/(share|embed)\/[0-9a-f]{20,}/.test(location.pathname);
+}
+
+function idDaPaginaLoom() {
+    const m = location.pathname.match(/^\/(?:share|embed)\/([0-9a-f]{20,})/);
+    return m ? m[1] : null;
+}
+
+function criarBotaoLoomNativo() {
+    if (!ehPaginaLoom()) return;
+    if (document.getElementById('sf-loom')) return;
+    const id = idDaPaginaLoom();
+    if (!id) return;
+    const video = document.querySelector('video#LoomShakaVideoPlayer, video');
+    if (!video) return;
+
+    // O <video> e o wrapper imediato ficam 0×0 (o Loom desenha o quadro num canvas).
+    // Sobe até o primeiro ancestral COM tamanho: é o container visível do player.
+    let alvo = video.parentElement;
+    while (alvo && (alvo.offsetWidth === 0 || alvo.offsetHeight === 0)) alvo = alvo.parentElement;
+    if (!alvo) return;   // ainda sem layout; o observador tenta de novo
+
+    if (getComputedStyle(alvo).position === 'static') alvo.style.position = 'relative';
+
+    const btn = criarPill('Baixar vídeo', false);   // overlay sobre o vídeo
+    btn.id = 'sf-loom';
+
+    btn.onclick = async () => {
+        if (btn.disabled) return;
+        btn.disabled = true;
+        btn._lab.textContent = 'Enviando…';
+        const titulo = limparTexto(
+            document.title.replace(/\s*[|-]\s*Loom\s*$/i, '').trim() || 'Video Loom');
+        try {
+            const resp = await fetch(SERVIDOR, {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({
+                    url: `https://www.loom.com/embed/${id}`,   // mesmo caminho do embed no Skool
+                    folder: 'Loom',
+                    filename: titulo,
+                }),
+            });
+            await resp.json();
+            btn._lab.textContent = 'Na fila';
+        } catch (e) {
+            console.error('[Loom] servidor offline?', e);
+            btn.classList.add('sf-pill--err');
+            btn._lab.textContent = 'Servidor offline?';
+        }
+        setTimeout(() => {
+            btn.disabled = false;
+            btn.classList.remove('sf-pill--err');
+            btn._lab.textContent = 'Baixar vídeo';
+        }, 4000);
+    };
+
+    alvo.appendChild(btn);
 }
 
 // --- 3. OBSERVADORES (O VIGIA) ---
@@ -163,6 +742,10 @@ function iniciarObservador() {
                 criarBotaoDownload(iframe);
             }
         });
+        // Botão de vídeo Vimeo (posts de comunidade e afins).
+        criarBotaoVimeo();
+        // Botão do Loom nativo (página do próprio loom.com/share|embed).
+        criarBotaoLoomNativo();
     });
     
     // Começa a vigiar o corpo da página
@@ -171,6 +754,18 @@ function iniciarObservador() {
 
 // Inicia o processo
 iniciarObservador();
+criarBotaoVimeo();
+criarBotaoLoomNativo();
+
+// Guarda contra perder aulas: se o usuário recarregar ou fechar a aba ENQUANTO o
+// curso está sendo enfileirado, o navegador mostra o aviso nativo de "sair da
+// página?". Isso ataca exatamente o cenário relatado (recarregar no meio do envio).
+window.addEventListener('beforeunload', (e) => {
+    if (enfileirandoEmAndamento) {
+        e.preventDefault();
+        e.returnValue = '';   // exigido por alguns navegadores para exibir o aviso
+    }
+});
 
 // Detecção de Navegação em SPA (Single Page Application)
 // Sites modernos não recarregam a página ao mudar de aula, então vigiamos a URL.

@@ -7,11 +7,19 @@ from dashboard import DASHBOARD_DATA
 
 # Importa nossos serviços via __init__.py
 from services import (
-    extrair_metadados, 
-    limpar_nome_arquivo, 
-    limpar_pasta, 
-    processar_download, 
-    converter_final, 
+    extrair_metadados,
+    limpar_nome_arquivo,
+    limpar_pasta,
+    processar_download,
+    converter_final,
+    salvar_aula_md,
+    baixar_youtube,
+    eh_url_youtube,
+    titulo_do_youtube,
+    canal_do_youtube,
+    baixar_vimeo,
+    eh_url_vimeo,
+    titulo_do_vimeo,
     PASTA_TEMP_RAIZ
 )
 
@@ -25,65 +33,112 @@ executor = ThreadPoolExecutor(max_workers=3)
 
 # --- 1. A LÓGICA DO TRABALHADOR (WORKER) ---
 # Esta função roda em "segundo plano" (background) para não travar o servidor.
-def worker_download(url, pasta_destino, nome_arquivo_sugerido, item_dashboard):
+def worker_download(url, pasta_destino, nome_arquivo_sugerido, item_dashboard,
+                    desc=None, resources=None, referer=None):
     """
-    Executa o ciclo completo de vida de um download:
-    Preparar -> Baixar -> Converter -> Limpar
+    Executa o ciclo completo de vida de uma aula:
+    Preparar -> (baixar vídeo) -> (converter) -> (gravar texto) -> Limpar
+
+    Três casos, todos suportados:
+    - vídeo + texto: baixa o .mp4 e grava o .md
+    - só vídeo: baixa o .mp4
+    - só texto (url vazia): grava apenas o .md
     """
-    
+
     # Atualiza o status visual para "Baixando"
     item_dashboard['status'] = 'baixando'
-    
+
     # A. Resolver o Nome do Arquivo
-    # Se a extensão não mandou nome, tentamos pegar do título da página (fallback)
-    if not nome_arquivo_sugerido:
-        titulo_extraido, _ = extrair_metadados(url)
-        nome_arquivo_sugerido = titulo_extraido
-    
+    # Se o pedido não trouxe nome (ex.: link colado no popup), descobrimos o título.
+    # YouTube -> yt-dlp; Loom/embed -> extrator do Loom. Rotear aqui evita que uma
+    # URL de YouTube caia no extrator do Loom e volte lixo.
+    if not nome_arquivo_sugerido and url:
+        if eh_url_youtube(url):
+            nome_arquivo_sugerido = titulo_do_youtube(url)
+        elif eh_url_vimeo(url):
+            nome_arquivo_sugerido = titulo_do_vimeo(url, referer)
+        else:
+            titulo_extraido, _ = extrair_metadados(url)
+            nome_arquivo_sugerido = titulo_extraido
+
     # Limpa caracteres proibidos (ex: remove "?", "/", ":")
     nome_limpo = limpar_nome_arquivo(nome_arquivo_sugerido)
-    item_dashboard['nome'] = nome_limpo # Atualiza o nome bonitinho no painel
-    
+    item_dashboard['nome'] = nome_limpo  # Atualiza o nome bonitinho no painel
+
+    # YouTube: organiza por canal — output/YouTube/<Canal>/<Titulo>.mp4, a mesma
+    # logica de pastas do Skool. O canal vem do proprio yt-dlp, entao vale para
+    # qualquer entrada (botao na pagina, popup ou link colado). Se o canal nao
+    # resolver, grava direto na pasta raiz (sem subpasta), sem quebrar nada.
+    if url and eh_url_youtube(url):
+        canal = canal_do_youtube(url)
+        if canal:
+            pasta_destino = os.path.join(pasta_destino, limpar_nome_arquivo(canal))
+            item_dashboard['folder'] = pasta_destino
+
     # Define onde ficarão os arquivos temporários (.ts)
     caminho_pasta_temp = os.path.join(PASTA_TEMP_RAIZ, nome_limpo)
-    
+
     # B. Função de Callback
     # O downloader chama isso a cada pedacinho baixado para atualizar a barra
     def atualizar_progresso(total=None):
-        if total: 
+        if total:
             item_dashboard['total'] = total
-        else: 
+        else:
             item_dashboard['progresso'] += 1
-    
-    # C. Iniciar Processo
-    # Extraímos a URL real do vídeo (m3u8) da página do Loom
-    _, url_m3u8 = extrair_metadados(url)
-    sucesso_operacao = False
-    
-    if url_m3u8:
-        # Tenta baixar (ou verifica se já existe)
-        # IMPORTANTE: Passamos 'nome_limpo' e 'pasta_destino' para a verificação inteligente
-        download_ok = processar_download(
-            url_m3u8, 
-            caminho_pasta_temp, 
-            nome_limpo,    
-            pasta_destino, 
-            atualizar_progresso
-        )
 
-        if download_ok:
-            item_dashboard['status'] = 'convertendo'
-            
-            # Tenta converter (juntar os .ts em .mp4) e mover para a pasta final
-            if converter_final(nome_limpo, pasta_destino, caminho_pasta_temp):
-                # Se tudo deu certo, apagamos a pasta temporária suja
-                limpar_pasta(caminho_pasta_temp) 
-                sucesso_operacao = True
-    
-    # D. Finalização e Relatório
-    if sucesso_operacao:
+    # C. Gravar o texto da aula (independe do vídeo; aula só-texto também tem).
+    # Sem vídeo, gravamos o .md mesmo vazio (placeholder) — assim uma aula do
+    # curso nunca é omitida em silêncio.
+    try:
+        caminho_md = salvar_aula_md(nome_limpo, pasta_destino, desc, resources,
+                                    permitir_vazio=not url)
+        if caminho_md:
+            item_dashboard['tem_texto'] = True
+    except Exception as erro:
+        print(f"⚠️  Não foi possível gravar o texto de '{nome_limpo}': "
+              f"{type(erro).__name__}: {erro}")
+
+    # D. Baixar o vídeo, se houver
+    video_ok = False
+    if not url:
+        # Aula só de texto: sucesso se o .md foi gravado.
+        item_dashboard['total'] = 1
+        item_dashboard['progresso'] = 1
+        sucesso_operacao = bool(item_dashboard.get('tem_texto'))
+        item_dashboard['status'] = 'sucesso' if sucesso_operacao else 'erro'
+        return
+
+    if eh_url_youtube(url):
+        # YouTube: o yt-dlp resolve formato + fusão vídeo/áudio com ffmpeg.
+        # Não passa pelo HLS nem pelo converter — grava direto o .mp4 final.
+        video_ok = baixar_youtube(url, pasta_destino, nome_limpo, atualizar_progresso)
+    elif eh_url_vimeo(url):
+        # Vimeo (privado no Skool): mesmo motor do YouTube, mas com o Referer da
+        # página — é o que libera o vídeo restrito por domínio.
+        video_ok = baixar_vimeo(url, pasta_destino, nome_limpo, referer, atualizar_progresso)
+    else:
+        # Loom (e afins via embed): extrai o .m3u8 e baixa o HLS.
+        _, url_m3u8 = extrair_metadados(url)
+
+        if url_m3u8:
+            download_ok = processar_download(
+                url_m3u8,
+                caminho_pasta_temp,
+                nome_limpo,
+                pasta_destino,
+                atualizar_progresso
+            )
+
+            if download_ok:
+                item_dashboard['status'] = 'convertendo'
+                if converter_final(nome_limpo, pasta_destino, caminho_pasta_temp):
+                    limpar_pasta(caminho_pasta_temp)
+                    video_ok = True
+
+    # E. Finalização e Relatório
+    if video_ok:
         item_dashboard['status'] = 'sucesso'
-        item_dashboard['progresso'] = item_dashboard['total'] # Garante barra 100%
+        item_dashboard['progresso'] = item_dashboard['total']  # Garante barra 100%
     else:
         item_dashboard['status'] = 'erro'
         # Em caso de erro, limpamos a temp para não deixar lixo corrompido ocupando espaço
@@ -97,28 +152,32 @@ def rota_receber_pedido():
     Exemplo de JSON: { "url": "...", "folder": "Curso/Modulo1", "filename": "Aula 1" }
     """
     dados_request = request.json
-    
+
     # Cria o objeto de dados que vai aparecer no Dashboard (Terminal)
     novo_item_dashboard = {
         'nome': dados_request.get('filename', 'Verificando...'),
         'status': 'fila',       # Começa na fila
-        'progresso': 0, 
+        'progresso': 0,
         'total': 1,             # Valor provisório até começar
         'url': dados_request.get('url'),
         'folder': dados_request.get('folder')
     }
-    
+
     # Adiciona na lista global (para o dashboard.py ler)
     DASHBOARD_DATA.append(novo_item_dashboard)
-    
+
     # Envia para a fila de execução (Thread)
     # O servidor responde "OK" imediatamente, sem esperar o download acabar.
+    # desc/resources são opcionais: quando presentes, geram o .md da aula.
     executor.submit(
-        worker_download, 
-        novo_item_dashboard['url'], 
-        novo_item_dashboard['folder'], 
-        novo_item_dashboard['nome'], 
-        novo_item_dashboard
+        worker_download,
+        novo_item_dashboard['url'],
+        novo_item_dashboard['folder'],
+        novo_item_dashboard['nome'],
+        novo_item_dashboard,
+        dados_request.get('desc'),
+        dados_request.get('resources'),
+        dados_request.get('referer')
     )
-    
+
     return jsonify({"status": "ok", "mensagem": "Adicionado à fila"})
