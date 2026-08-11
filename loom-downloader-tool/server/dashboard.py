@@ -349,21 +349,27 @@ def _montar_layout(itens, altura_terminal):
     altura = max(altura_terminal or 0, 12)
 
     ativos = sum(1 for i in itens if i.get('status') in _STATUS_ATIVO)
-    disponivel = altura - ALTURA_MARCA - ALTURA_RESUMO - ALTURA_HISTORICO
 
-    # A tabela de ativos tem prioridade: é o que está acontecendo agora.
-    # Reserva para ela a moldura + as linhas ativas + ao menos 1 linha de fila.
-    minimo_ativos = _MOLDURA_ATIVOS + max(ativos, 1) + 1
-    espaco_cursos = max(0, disponivel - minimo_ativos)
+    # PRIORIDADE, do mais para o menos importante:
+    #   marca > resumo > cursos > ativos > histórico
+    # O histórico é o único descartável: ele só repete, em outro formato, o que o
+    # resumo já diz. Antes ele era fixo e quem caía era a tabela de CURSOS — que é
+    # justamente a resposta para "em que módulo estou e quanto falta". Com 4
+    # downloads simultâneos num terminal de 30 linhas, tudo somado dava 31: o
+    # Cursos sumia sem aviso e o painel parecia ter perdido uma seção.
+    disponivel = altura - ALTURA_MARCA - ALTURA_RESUMO
 
     partes = [
         Layout(_com_respiro(_barra_marca(itens)), name="marca", size=ALTURA_MARCA),
         Layout(_com_respiro(_painel_resumo(itens)), name="resumo", size=ALTURA_RESUMO),
     ]
 
-    # `espaco_cursos` já é o que sobra DEPOIS de garantir o mínimo dos ativos, então
-    # dividir de novo (era `// 3`) starvava a tabela: num terminal de 30 linhas ela
-    # sumia por completo. Aqui ela usa o que há de fato, até o teto de 8 linhas.
+    # Ativos precisam no mínimo da moldura + as linhas em download (a fila pode ir
+    # a zero sem perder informação: o resumo já diz quantas estão esperando).
+    minimo_ativos = _MOLDURA_ATIVOS + max(ativos, 1)
+
+    # Cursos: só existe com pelo menos 1 linha útil; teto de 8.
+    espaco_cursos = max(0, disponivel - minimo_ativos)
     linhas_cursos = min(8, max(0, espaco_cursos - _MOLDURA_CURSOS))
     tabela_cursos = _tabela_cursos(itens, linhas_cursos)
     if tabela_cursos is not None:
@@ -371,11 +377,16 @@ def _montar_layout(itens, altura_terminal):
         partes.append(Layout(_com_respiro(tabela_cursos), name="cursos", size=alto_cursos))
         disponivel -= alto_cursos
 
-    # O que sobrou vai para a fila da tabela de ativos.
+    # O histórico entra só se ainda sobrar espaço depois do mínimo dos ativos.
+    mostrar_historico = (disponivel - minimo_ativos) >= ALTURA_HISTORICO
+    if mostrar_historico:
+        disponivel -= ALTURA_HISTORICO
+
     max_fila = max(0, disponivel - _MOLDURA_ATIVOS - ativos)
     partes.append(Layout(_com_respiro(_gerar_tabela_ativos(itens, max_fila)), name="main"))
-    partes.append(Layout(_gerar_painel_historico(itens), name="footer",
-                         size=ALTURA_HISTORICO))
+    if mostrar_historico:
+        partes.append(Layout(_gerar_painel_historico(itens), name="footer",
+                             size=ALTURA_HISTORICO))
 
     layout = Layout()
     layout.split(*partes)

@@ -24,8 +24,26 @@ PASTA_OUTPUT = os.path.join(os.path.dirname(os.path.abspath(__file__)), "output"
 EXT_PRINCIPAIS = {".mp4", ".md"}
 
 
+def _eh_pasta_de_aula(pasta):
+    """True se a pasta JÁ é a pasta de uma aula (contém arquivo com o mesmo nome)."""
+    nome = os.path.basename(pasta)
+    try:
+        itens = os.listdir(pasta)
+    except OSError:
+        return False
+    return any(os.path.splitext(f)[0] == nome
+               for f in itens if os.path.isfile(os.path.join(pasta, f)))
+
+
 def _agrupar(pasta):
     """Agrupa os arquivos soltos de uma pasta por aula. Devolve {aula: [arquivos]}."""
+    # IDEMPOTÊNCIA: dentro de `Aula X/` existem `Aula X.mp4` e `Aula X.md` — um grupo
+    # de 2 arquivos. Sem esta guarda o script "consertaria" o que já está certo,
+    # criando `Aula X/Aula X/` a cada nova execução. Medido: de 278 grupos
+    # reportados numa 2a rodada, 262 eram este falso positivo.
+    if _eh_pasta_de_aula(pasta):
+        return {}
+
     try:
         nomes = os.listdir(pasta)
     except OSError:
