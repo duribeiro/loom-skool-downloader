@@ -28,10 +28,12 @@ def url_player_vimeo(url):
     return url
 
 
-def baixar_vimeo(url, pasta_relativa_destino, nome_arquivo, referer=None, callback=None):
+def baixar_vimeo(url, pasta_relativa_destino, nome_arquivo, referer=None, callback=None,
+                 ao_converter=None):
     """Baixa um vídeo do Vimeo na melhor qualidade em .mp4 (com referer do Skool)."""
     return baixar_com_ytdlp(url_player_vimeo(url), pasta_relativa_destino,
-                            nome_arquivo, callback=callback, referer=referer)
+                            nome_arquivo, callback=callback, referer=referer,
+                            ao_converter=ao_converter)
 
 
 def titulo_do_vimeo(url, referer=None):

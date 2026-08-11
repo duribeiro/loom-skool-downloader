@@ -1,8 +1,8 @@
 {
   "manifest_version": 3,
   "name": "Sifão — Baixador de aulas",
-  "version": "3.0",
-  "description": "Baixa aulas do Skool/Loom, vídeos do YouTube (por canal) e Vimeo — na página ou pelo curso inteiro, via um servidor local.",
+  "version": "4.0",
+  "description": "Baixa aulas do Skool (vídeo, texto e anexos), Loom, YouTube e Vimeo — na página, pelo curso inteiro ou pela comunidade toda, via um servidor local.",
   "permissions": [
     "activeTab",
     "scripting"

@@ -14,9 +14,11 @@ def eh_url_youtube(url):
     return "youtube.com" in u or "youtu.be" in u
 
 
-def baixar_youtube(url, pasta_relativa_destino, nome_arquivo, callback=None):
+def baixar_youtube(url, pasta_relativa_destino, nome_arquivo, callback=None,
+                   ao_converter=None):
     """Baixa um vídeo do YouTube na melhor qualidade em .mp4."""
-    return baixar_com_ytdlp(url, pasta_relativa_destino, nome_arquivo, callback=callback)
+    return baixar_com_ytdlp(url, pasta_relativa_destino, nome_arquivo,
+                            callback=callback, ao_converter=ao_converter)
 
 
 def titulo_do_youtube(url):
