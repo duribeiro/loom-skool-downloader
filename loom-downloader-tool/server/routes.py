@@ -31,10 +31,20 @@ from services import (
 # Cria o Blueprint (um módulo da aplicação Flask)
 download_bp = Blueprint('download', __name__)
 
-# Configura o Executor de Threads
-# max_workers=3 significa que baixamos no máximo 3 aulas SIMULTANEAMENTE.
-# O resto fica na fila esperando uma vaga.
-executor = ThreadPoolExecutor(max_workers=3)
+# Pasta que a extensão manda quando o vídeo vem de um LINK COLADO (popup ou botão
+# na página do YouTube). Só nesse caso faz sentido subdividir por canal.
+PASTA_LINK_YOUTUBE = 'YouTube'
+
+# Quantas aulas baixam ao mesmo tempo. O gargalo real é local (ffmpeg fundindo
+# vídeo+áudio e disco), não o servidor remoto: os downloads usam URLs assinadas de
+# CDN, que são feitas para entrega paralela. Ajustável sem editar código:
+#   SIFAO_DOWNLOADS_SIMULTANEOS=6 python server/app.py
+try:
+    _SIMULTANEOS = max(1, int(os.environ.get('SIFAO_DOWNLOADS_SIMULTANEOS', '4')))
+except ValueError:
+    _SIMULTANEOS = 4
+
+executor = ThreadPoolExecutor(max_workers=_SIMULTANEOS)
 
 # --- 0. ORGANIZAÇÃO EM PASTA POR AULA ---
 # Uma aula pode render vários arquivos (mp4 + md + anexos). Soltos no módulo, eles
@@ -133,7 +143,14 @@ def worker_download(url, pasta_destino, nome_arquivo_sugerido, item_dashboard,
     # logica de pastas do Skool. O canal vem do proprio yt-dlp, entao vale para
     # qualquer entrada (botao na pagina, popup ou link colado). Se o canal nao
     # resolver, grava direto na pasta raiz (sem subpasta), sem quebrar nada.
-    if url and eh_url_youtube(url):
+    # SÓ para link colado. Antes isto valia para QUALQUER URL de YouTube, e uma aula
+    # do Skool cujo vídeo mora no YouTube ganhava uma pasta com o nome do CANAL no
+    # meio do caminho — nível que não existe no Skool. O efeito: a aula saía da
+    # sequência do módulo (ex.: as aulas 1,2,4,6 de Chatwoot soltas e a 5 enterrada
+    # em 'Gabriel Morais/'), e 47 vídeos de Office Hours foram parar em 'Maven AI/'
+    # e 'Well Pires/'. Quando o pedido vem de um curso, a pasta já é
+    # Comunidade/Curso/Módulo e não deve ganhar mais um nível.
+    if url and eh_url_youtube(url) and pasta_destino.strip(os.sep + '/') == PASTA_LINK_YOUTUBE:
         canal = canal_do_youtube(url)
         if canal:
             pasta_destino = os.path.join(pasta_destino, limpar_nome_arquivo(canal))
