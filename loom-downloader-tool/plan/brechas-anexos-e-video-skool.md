@@ -1,5 +1,19 @@
 # Brechas descobertas: anexos e vídeo hospedado no Skool
 
+> **STATUS: AS DUAS BRECHAS ESTÃO FECHADAS.** Conferido no código em 11/08/2026:
+>
+> | item | onde está hoje |
+> |---|---|
+> | Vídeo do Skool (Mux) | `server/services/skool.py` (`eh_url_skool_video:40`, `_diagnosticar:55`, `baixar_skool:180`), roteado em `routes.py:241` |
+> | **Anexos (`file_id`)** | `baixar_anexos` (`skool.py:117`), chamado em `routes.py:208` — **antes** do vídeo, de propósito |
+> | Dashboard reescrito | `server/dashboard.py` inteiro; já rodou e foi reescrito outra vez desde então (marca, tabela de Cursos, orçamento de altura) |
+> | Botão individual do vídeo do Skool | `criarBotaoVideoSkool` (`extension/content.js:1066`) — **saiu do "fora de escopo"**, existe |
+>
+> Duas afirmações **deste documento envelheceram** e estão anotadas no corpo:
+> a de que `processar_download` já baixaria o HLS do Mux (refutada mais abaixo,
+> no próprio texto) e a de que um 403 cairia nos `except:` nus do downloader
+> (esses `except:` não existem mais — hoje há retry com backoff e falha reportada).
+
 Data: 2026-08-10 · Medido em `ai-makers` (280 aulas, 11 cursos acessíveis)
 
 ## Resumo: o que se perde hoje
@@ -80,8 +94,13 @@ https://stream.video.skool.com/{playbackId}.m3u8?token={playbackToken}
 
 ### Por que isso encaixa bem na arquitetura atual
 
-- É **HLS** — `processar_download` (`services/downloader.py:44`) já baixa exatamente
-  isso. **O servidor não precisa de motor novo**; basta receber a URL `.m3u8`.
+> ⛔ **REFUTADO no mesmo dia** — ver "Por que NÃO reaproveitamos o `processar_download`",
+> mais abaixo. O master do Mux é incompatível com o motor HLS do Loom em dois pontos
+> medidos. Ficou registrado como exemplo do que acontece ao supor compatibilidade
+> por "é HLS também" sem abrir o arquivo.
+
+- É **HLS** — `processar_download` (`services/downloader.py:44`, hoje `:201`) já baixa
+  exatamente isso. **O servidor não precisa de motor novo**; basta receber a URL `.m3u8`.
 - `pageProps.video` vem **na mesma resposta** que `buscarTextoDaAula(md, ctx)`
   (`content.js:358`) já busca por aula. Dá para ler o vídeo **sem nenhum request extra**.
 
@@ -93,11 +112,16 @@ resultado seria um 403 engolido pelos `except:` nus do downloader — **falha si
 de novo**. Precisa de decisão: resolver o token no momento do download (servidor pede à
 extensão / refaz o fetch) ou detectar 403 e re-resolver. Não implementar sem tratar isso.
 
----
+> **Resolvido (Opção A, ver adiante) e o cenário do 403 mudou:** os `except:` nus
+> citados aqui não existem mais no `downloader.py`. De qualquer forma o vídeo do Skool
+> nem passa por ele — vai pelo yt-dlp, com `_diagnosticar` (`skool.py:55`) checando o
+> master antes e traduzindo 403/400 numa mensagem acionável.
 
 ---
 
-## Dashboard do terminal — FEITO (aguardando restart)
+---
+
+## Dashboard do terminal — FEITO (o restart já aconteceu; painel novo em produção)
 
 Reescrito `server/dashboard.py`. Só esse arquivo mudou: o `folder` já era gravado em
 cada item (`routes.py:163`), então o agrupamento por curso/módulo saiu de graça.
@@ -206,15 +230,30 @@ evitou uma mudança errada em código que já funcionava.
 HTTPS não alcança `localhost` no *main world* (só o content script, que tem
 `host_permissions`), então não deu para simular sem recarregar a extensão.
 
-### Escopo deliberadamente deixado de fora
+### Escopo deliberadamente deixado de fora — DEPOIS FEITO
 
 Aula com vídeo do Skool **não ganha botão individual** na página (o player é Mux, não
 iframe, e o pill atual só nasce em iframe do Loom). O caminho de curso/comunidade
 cobre essas aulas. Anexos (`file_id`) seguem pendentes.
 
-## Ordem sugerida
+> ✅ **Os dois foram implementados depois.**
+> - **Botão individual:** `criarBotaoVideoSkool` (`extension/content.js:1066`). Acha o
+>   player pela `background-image` de `image.video.skool.com` — medido: antes do play
+>   não existe `<video>` nem `<img>`, a thumbnail é background de uma div, e a primeira
+>   tentativa (`img[src*=…]`) nunca casava. Resolve o token **no clique**, nunca guarda
+>   token velho, e se auto-limita por `md` para o MutationObserver não virar enxurrada
+>   de fetch.
+> - **Anexos:** `baixar_anexos` (`server/services/skool.py:117`) + resolução da URL
+>   assinada na extensão. O nome vira `<Aula> - <arquivo.ext>` com orçamento de
+>   caracteres dividido entre os dois (`_nome_do_anexo`, `skool.py:97`) — truncar só o
+>   arquivo deixava o nome final estourar 90 chars com título de aula longo (medido:
+>   147). Dentro da pasta própria da aula o prefixo é dispensado (`prefixar=False`).
 
-1. **Vídeo `videoId`** — 32 aulas de vídeo perdidas, e um curso inteiro (Supabase) zerado.
-2. **Anexos** — 44 aulas; conteúdo complementar, não a aula em si.
+## Ordem sugerida — CUMPRIDA
 
-Ambos dependem de decidir o tratamento do token/URL expirável.
+1. ~~**Vídeo `videoId`**~~ — 32 aulas de vídeo perdidas, e um curso inteiro (Supabase)
+   zerado. **Feito** (Opção A: extensão resolve o token e manda o `.m3u8`).
+2. ~~**Anexos**~~ — 44 aulas; conteúdo complementar, não a aula em si. **Feito.**
+
+Ambos dependiam de decidir o tratamento do token/URL expirável — decidido em favor de
+resolver na extensão, com detecção explícita de expiração no servidor.

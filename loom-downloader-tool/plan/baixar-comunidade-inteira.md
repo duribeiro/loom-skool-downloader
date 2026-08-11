@@ -1,5 +1,12 @@
 # Baixar todos os cursos de uma comunidade (Skool)
 
+> **STATUS: IMPLEMENTADO E EM USO.** Conferido no código em 11/08/2026:
+> `ehPaginaComunidade` (`extension/content.js:572`), `buscarPagePropsDeCurso`
+> (`:578`), `listarCursosDaComunidade` (`:616`) e o card de confirmação em dois
+> passos no popup (`extension/popup.js:101-170`). Só o último item do checklist
+> — teste de ponta a ponta com a extensão recarregada — **não é verificável por
+> leitura de código**; ficou como estava.
+
 Data: 2026-08-10 · Branch: Dev
 
 ## Objetivo

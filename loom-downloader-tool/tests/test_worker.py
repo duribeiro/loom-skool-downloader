@@ -67,7 +67,11 @@ def test_aula_video_mais_texto(output_isolado, monkeypatch):
     item = _item(url="https://www.loom.com/embed/abc")
     routes.worker_download(item["url"], item["folder"], item["nome"], item, DESC, RESOURCES)
 
-    md = output_isolado / "Com" / "Curso" / "Modulo" / "Aula 1.md"
+    # Vídeo + texto = 2 artefatos, então a aula ganha PASTA PRÓPRIA
+    # (`_quantos_artefatos >= 2`, routes.py:161). Por isso o .md fica em
+    # `Modulo/Aula 1/Aula 1.md`, e não solto no módulo como nas aulas de um
+    # arquivo só. A decisão é tomada antes do download, pelo que se espera gerar.
+    md = output_isolado / "Com" / "Curso" / "Modulo" / "Aula 1" / "Aula 1.md"
     assert md.exists()
     assert item["status"] == "sucesso"
 
@@ -126,8 +130,13 @@ def test_youtube_sem_nome_usa_titulo_ytdlp_nao_loom(output_isolado, monkeypatch)
 def test_aula_vimeo_roteia_com_referer(output_isolado, monkeypatch):
     """URL de Vimeo vai pro baixar_vimeo, levando o referer do pedido."""
     capturado = {}
+    # O dublê aceita **kwargs de propósito. A versão anterior fixava os 5
+    # parâmetros de então e quebrou com `TypeError` quando `baixar_vimeo` ganhou
+    # `ao_converter` (vimeo.py:31-32) — falha do teste, não do código. Assinatura
+    # frouxa aqui porque o que está sob teste é o ROTEAMENTO, não a assinatura.
     monkeypatch.setattr(routes, "baixar_vimeo",
-                        lambda url, pasta, nome, referer, cb: capturado.update(url=url, referer=referer) or True)
+                        lambda url, pasta, nome, referer=None, *a, **k:
+                            capturado.update(url=url, referer=referer) or True)
     monkeypatch.setattr(routes, "baixar_youtube",
                         lambda *a, **k: pytest.fail("Vimeo não deve ir pro youtube"))
     monkeypatch.setattr(routes, "limpar_pasta", lambda *a, **k: None)
@@ -164,6 +173,9 @@ def test_video_falha_status_erro(output_isolado, monkeypatch):
     item = _item(url="https://www.loom.com/embed/abc")
     routes.worker_download(item["url"], item["folder"], item["nome"], item, DESC, RESOURCES)
 
-    # o .md foi gravado mesmo assim (não se perde o texto)
-    assert (output_isolado / "Com" / "Curso" / "Modulo" / "Aula 1.md").exists()
+    # o .md foi gravado mesmo assim (não se perde o texto).
+    # Fica na pasta da aula porque a decisão de criar pasta é tomada ANTES do
+    # download, pelo que se espera gerar (vídeo + texto = 2). O vídeo falhar
+    # depois não desfaz a pasta — e não deve mesmo: o texto já está lá dentro.
+    assert (output_isolado / "Com" / "Curso" / "Modulo" / "Aula 1" / "Aula 1.md").exists()
     assert item["status"] == "erro"

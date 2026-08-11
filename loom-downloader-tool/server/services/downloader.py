@@ -9,6 +9,18 @@ from .caminhos import PASTA_OUTPUT
 # Quantas vezes tentar baixar um segmento antes de desistir dele.
 TENTATIVAS_POR_SEGMENTO = 3
 
+# Timeout de rede, em segundos.
+#
+# O `requests` NÃO tem timeout padrão: sem este parâmetro, um socket que para de
+# responder sem fechar a conexão trava a thread para sempre. E o pior é que isso
+# nunca vira exceção — então o retry não entra em ação, porque do ponto de vista
+# do código a requisição ainda está em andamento.
+#
+# Medido em 11/08/2026: numa rodada do benchmark com 8 aulas simultâneas, uma
+# delas ficou com ZERO bytes de progresso por mais de 120s enquanto as outras 11
+# terminaram. Trava antes do primeiro segmento é o que explica o zero.
+TIMEOUT_SEGUNDOS = 20
+
 
 # --- PARSER DE PLAYLIST HLS --------------------------------------------------
 # Uma playlist HLS tem gramática própria: linhas de tag começam com '#', e a
@@ -131,20 +143,27 @@ def _baixar_segmento(dados_segmento):
     for tentativa in range(1, TENTATIVAS_POR_SEGMENTO + 1):
         try:
             # stream=True baixa aos poucos, sem lotar a RAM.
-            with requests.get(url, headers=HEADERS, stream=True, timeout=20) as resposta:
-                if resposta.status_code != 200:
-                    ultimo_erro = f"HTTP {resposta.status_code}"
-                    continue
-                with open(caminho_arquivo, "wb") as arquivo:
-                    for pedaco_bytes in resposta.iter_content(chunk_size=8192):
-                        arquivo.write(pedaco_bytes)
-            if callback_progresso:
-                callback_progresso()
-            return True
+            with requests.get(url, headers=HEADERS, stream=True,
+                              timeout=TIMEOUT_SEGUNDOS) as resposta:
+                if resposta.status_code == 200:
+                    with open(caminho_arquivo, "wb") as arquivo:
+                        for pedaco_bytes in resposta.iter_content(chunk_size=8192):
+                            arquivo.write(pedaco_bytes)
+                    if callback_progresso:
+                        callback_progresso()
+                    return True
+                ultimo_erro = f"HTTP {resposta.status_code}"
         except Exception as erro:
             ultimo_erro = f"{type(erro).__name__}: {erro}"
-            if tentativa < TENTATIVAS_POR_SEGMENTO:
-                time.sleep(0.5 * tentativa)  # pequeno backoff antes de tentar de novo
+
+        # Backoff FORA do `except`, de propósito.
+        #
+        # Antes ele só rodava quando havia exceção: um status ruim caía num
+        # `continue` e re-tentava na hora, sem esperar nada. Justo o caso em que
+        # esperar é obrigatório — HTTP 429/503 é o servidor pedindo calma, e
+        # três tentativas instantâneas são o caminho mais curto para um bloqueio.
+        if tentativa < TENTATIVAS_POR_SEGMENTO:
+            time.sleep(0.5 * tentativa)
 
     # Falhou de vez. Remove um arquivo parcial para não virar "sucesso" na retomada.
     if os.path.exists(caminho_arquivo):
@@ -155,6 +174,34 @@ def _baixar_segmento(dados_segmento):
     print(f"⚠️  Segmento falhou após {TENTATIVAS_POR_SEGMENTO} tentativas "
           f"({ultimo_erro}): {os.path.basename(caminho_arquivo)}")
     return False
+
+
+def _baixar_texto(url, descricao):
+    """
+    Baixa um arquivo de texto do HLS (master.m3u8 ou mediaplaylist).
+
+    Mesma política do segmento: timeout obrigatório e algumas tentativas com
+    backoff. Devolve o conteúdo, ou None se desistiu.
+
+    Estas requisições acontecem ANTES de qualquer segmento entrar na fila — uma
+    trava aqui deixa a aula inteira parada sem baixar um único byte, e nem o
+    dashboard tem o que mostrar porque o total de segmentos ainda é desconhecido.
+    """
+    ultimo_erro = None
+    for tentativa in range(1, TENTATIVAS_POR_SEGMENTO + 1):
+        try:
+            resposta = requests.get(url, headers=HEADERS, timeout=TIMEOUT_SEGUNDOS)
+            if resposta.status_code == 200:
+                return resposta.text
+            ultimo_erro = f"HTTP {resposta.status_code}"
+        except Exception as erro:
+            ultimo_erro = f"{type(erro).__name__}: {erro}"
+        if tentativa < TENTATIVAS_POR_SEGMENTO:
+            time.sleep(0.5 * tentativa)
+
+    print(f"❌ Falha ao baixar {descricao} após {TENTATIVAS_POR_SEGMENTO} "
+          f"tentativas ({ultimo_erro}).")
+    return None
 
 
 def processar_download(url_master, pasta_temp, nome, pasta_rel, callback_progresso=None):
@@ -183,11 +230,8 @@ def processar_download(url_master, pasta_temp, nome, pasta_rel, callback_progres
     # --- PREPARAÇÃO ---
     os.makedirs(pasta_temp, exist_ok=True)
 
-    try:
-        resposta_master = requests.get(url_master, headers=HEADERS)
-        texto_master = resposta_master.text
-    except Exception as erro:
-        print(f"❌ Não foi possível baixar o master.m3u8: {type(erro).__name__}: {erro}")
+    texto_master = _baixar_texto(url_master, "o master.m3u8")
+    if texto_master is None:
         return False
 
     base_url = url_master.rsplit("/", 1)[0] + "/"
@@ -212,11 +256,8 @@ def processar_download(url_master, pasta_temp, nome, pasta_rel, callback_progres
 
     def preparar_playlist(arquivo_m3u8, tipo):
         url_completa = f"{base_url}{arquivo_m3u8}?{assinatura_url}"
-        try:
-            resposta = requests.get(url_completa, headers=HEADERS)
-            conteudo_playlist = resposta.text
-        except Exception as erro:
-            print(f"❌ Falha ao baixar a playlist de {tipo}: {type(erro).__name__}: {erro}")
+        conteudo_playlist = _baixar_texto(url_completa, f"a playlist de {tipo}")
+        if conteudo_playlist is None:
             return
 
         nome_arquivo_playlist = os.path.basename(arquivo_m3u8.split("?", 1)[0])
