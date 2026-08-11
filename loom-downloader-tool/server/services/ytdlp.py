@@ -25,6 +25,24 @@ FORMATO_MELHOR_MP4 = "bv*+ba[ext=m4a]/bv*+ba/b"
 _TAMANHO_MINIMO = 100_000
 
 
+class _LogadorSilencioso:
+    """Engole a saída do yt-dlp.
+
+    O dashboard (Rich Live) pinta a tela inteira; qualquer escrita direta no stdout
+    vinda das threads de download aparece por um quadro e some no repaint seguinte,
+    fazendo a tela tremer. Erros que importam já são impressos pelo chamador, com
+    contexto de qual aula falhou — que a mensagem crua do yt-dlp não traz.
+    """
+
+    def debug(self, msg): pass
+
+    def info(self, msg): pass
+
+    def warning(self, msg): pass
+
+    def error(self, msg): pass
+
+
 def _normalizar_pasta_relativa(pasta_relativa):
     return pasta_relativa[1:] if pasta_relativa.startswith(os.sep) else pasta_relativa
 
@@ -52,7 +70,8 @@ def titulo_via_ytdlp(url, referer=None):
     Usado quando o pedido vem sem nome. Em caso de falha devolve um nome
     genérico — nunca estoura, para não derrubar o worker.
     """
-    opcoes = {"quiet": True, "no_warnings": True, "skip_download": True}
+    opcoes = {"quiet": True, "no_warnings": True, "skip_download": True,
+              "noprogress": True, "logger": _LogadorSilencioso()}
     cabecalhos = _headers(referer)
     if cabecalhos:
         opcoes["http_headers"] = cabecalhos
@@ -71,7 +90,8 @@ def canal_via_ytdlp(url, referer=None):
     Metadados apenas (sem baixar). Devolve '' se falhar — o chamador então grava
     direto na pasta raiz, sem subpasta de canal. Nunca estoura.
     """
-    opcoes = {"quiet": True, "no_warnings": True, "skip_download": True}
+    opcoes = {"quiet": True, "no_warnings": True, "skip_download": True,
+              "noprogress": True, "logger": _LogadorSilencioso()}
     cabecalhos = _headers(referer)
     if cabecalhos:
         opcoes["http_headers"] = cabecalhos
@@ -85,12 +105,18 @@ def canal_via_ytdlp(url, referer=None):
         return ""
 
 
-def baixar_com_ytdlp(url, pasta_relativa_destino, nome_arquivo, callback=None, referer=None):
+def baixar_com_ytdlp(url, pasta_relativa_destino, nome_arquivo, callback=None,
+                     referer=None, ao_converter=None):
     """Baixa um vídeo na melhor qualidade em .mp4 via yt-dlp.
 
     `referer`, quando dado, vai no header — é o que libera Vimeo privado do Skool.
     Grava direto no destino final. Devolve True se o .mp4 final existir; False em
     qualquer falha — e a falha é **visível** no terminal, nunca engolida.
+
+    `ao_converter` é chamado quando o yt-dlp entra no pós-processamento (a fusão
+    vídeo+áudio pelo ffmpeg). Sem isso o painel mostrava a barra em 100% ainda
+    rotulada "Baixando" durante todo o merge — que em vídeo longo demora, e passava
+    a impressão de travamento. Só o caminho do Loom sinalizava "convertendo".
     """
     pasta_relativa = _normalizar_pasta_relativa(pasta_relativa_destino)
     pasta_destino_abs = os.path.join(PASTA_OUTPUT, pasta_relativa)
@@ -134,8 +160,31 @@ def baixar_com_ytdlp(url, pasta_relativa_destino, nome_arquivo, callback=None, r
         "noplaylist": True,
         "quiet": True,
         "no_warnings": True,
+        # `quiet` NÃO desliga a barra de progresso — ela continua sendo reescrita no
+        # stdout e briga com o dashboard pelo controle da tela (a linha "[download]
+        # 42% at 1.2MiB/s" piscando, e o painel inteiro repintando junto).
+        # `noprogress` é quem cala a barra; o progresso real chega pelo progress_hook.
+        "noprogress": True,
+        # Rede de segurança: qualquer outra mensagem do yt-dlp também sai do stdout.
+        "logger": _LogadorSilencioso(),
         "progress_hooks": [_hook],
     }
+
+    if ao_converter:
+        # 'started' dispara ao entrar em cada pós-processador (o Merger é um deles).
+        # Guardamos para avisar UMA vez: são vários PPs por download.
+        avisado = {"sim": False}
+
+        def _pp_hook(d):
+            if d.get("status") == "started" and not avisado["sim"]:
+                avisado["sim"] = True
+                try:
+                    ao_converter()
+                except Exception:
+                    pass   # o painel nunca pode derrubar o download
+
+        opcoes["postprocessor_hooks"] = [_pp_hook]
+
     cabecalhos = _headers(referer)
     if cabecalhos:
         opcoes["http_headers"] = cabecalhos

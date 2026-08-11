@@ -287,7 +287,16 @@ function extrairAulas(pp) {
         const videoLink = meta.videoLink || '';
         const ehLoom = /loom\.com\/(embed|share)\//.test(videoLink);
         const ehYoutube = /(youtube\.com|youtu\.be)/.test(videoLink);
-        const ehVideo = ehLoom || ehYoutube;   // o servidor roteia Loom vs YouTube
+        const ehLink = ehLoom || ehYoutube;   // o servidor roteia Loom vs YouTube
+
+        // VÍDEO HOSPEDADO NO PRÓPRIO SKOOL: a aula não tem `videoLink`, só `videoId`.
+        // MEDIDO: 32 das 280 aulas de ai-makers são assim, e o curso "Supabase" é
+        // 100% desse tipo — todas eram tratadas como "sem vídeo" e só viravam .md.
+        // A URL do stream não dá para montar aqui: depende de playbackId+playbackToken,
+        // que só vêm no JSON da aula ABERTA. Marcamos e resolvemos na fase 1 do
+        // enfileiramento, que já busca esse JSON por aula (custo zero de request).
+        const videoIdSkool = (!ehLink && meta.videoId) ? String(meta.videoId) : '';
+        const ehVideo = ehLink || !!videoIdSkool;
 
         // Texto/recursos: tenta o campo direto; se vazio, busca dentro da unit
         // por uma string "[v2]" (desc) ou um array de recursos. Ancorado nos
@@ -313,11 +322,12 @@ function extrairAulas(pp) {
             .join('/');
 
         aulas.push({
-            url: ehVideo ? videoLink : '',
+            url: ehLink ? videoLink : '',   // do Skool, a URL só nasce na fase 1
             folder: pasta,
             filename: limparTexto(meta.title || 'Aula sem titulo'),
             desc: desc,
             resources: resources,
+            _videoId: videoIdSkool,
             _temVideo: ehVideo,
             _temTexto: temTexto,
             _unitType: unit.unitType,
@@ -355,7 +365,23 @@ function extrairTextoParaMd(pp, md) {
     return { desc, resources };
 }
 
-async function buscarTextoDaAula(md, ctx) {
+// Host do HLS do Skool (Mux white-label) — o mesmo que services/skool.py reconhece.
+const HOST_STREAM_SKOOL = 'stream.video.skool.com';
+
+function extrairVideoSkool(pp, videoId) {
+    // MEDIDO: o JSON da aula ABERTA traz `pageProps.video` com o par
+    // playbackId + playbackToken. Sem o token o CDN responde 403.
+    //
+    // Conferimos `v.id === videoId` de propósito: as buscas por aula rodam
+    // concorrentes, e sem essa checagem uma resposta trocada colaria o vídeo de
+    // OUTRA aula neste registro — erro que ninguém perceberia até assistir.
+    if (!pp || !videoId) return '';
+    const v = pp.video;
+    if (!v || v.id !== videoId || !v.playbackId || !v.playbackToken) return '';
+    return `https://${HOST_STREAM_SKOOL}/${v.playbackId}.m3u8?token=${v.playbackToken}`;
+}
+
+async function buscarTextoDaAula(md, ctx, videoId) {
     if (!md || !ctx || !ctx.buildId || !ctx.group || !ctx.course) return { desc: '', resources: '' };
     const q = `md=${encodeURIComponent(md)}&group=${encodeURIComponent(ctx.group)}` +
               `&course=${encodeURIComponent(ctx.course)}`;
@@ -365,10 +391,53 @@ async function buscarTextoDaAula(md, ctx) {
         if (!r.ok) { console.warn(`[Loom] _next/data ${r.status} para md ${md}`); return { desc: '', resources: '' }; }
         const json = await r.json();
         const pp = json.pageProps || (json.props && json.props.pageProps);
-        return extrairTextoParaMd(pp, md);
+        const out = extrairTextoParaMd(pp, md);
+        // Mesma resposta, nenhum request a mais: o vídeo do Skool vem daqui.
+        out.urlVideo = extrairVideoSkool(pp, videoId);
+        return out;
     } catch (e) {
         console.warn(`[Loom] falha ao buscar texto da aula ${md}:`, e);
         return { desc: '', resources: '' };
+    }
+}
+
+// --- ARQUIVOS ANEXOS DA AULA ---
+// `resources` tem DUAS formas: link ({title, link}) e ARQUIVO ({title, file_id,
+// file_name, file_content_type}). O `pareceResources` aceita as duas (ambas têm
+// `title`), então o anexo virava só um nome no .md e os bytes nunca eram buscados.
+// MEDIDO em ai-makers: 44 aulas com anexo, 38 delas na Biblioteca de Templates —
+// curso em que o anexo É o produto e o vídeo só explica o template.
+
+const API_ARQUIVOS_SKOOL = 'https://api2.skool.com/files';
+
+function anexosDeResources(resources) {
+    if (!resources) return [];
+    let arr;
+    try {
+        arr = typeof resources === 'string' ? JSON.parse(resources) : resources;
+    } catch (e) { return []; }
+    if (!Array.isArray(arr)) return [];
+    return arr
+        .filter(i => i && i.file_id)
+        .map(i => ({
+            fileId: String(i.file_id),
+            nome: String(i.file_name || i.title || i.file_id),
+        }));
+}
+
+async function resolverUrlAnexo(fileId) {
+    // MEDIDO: é POST (GET responde 405) e a resposta é TEXTO PURO com a URL assinada
+    // em files.skool.com — que já NÃO precisa de cookie. Por isso o servidor consegue
+    // baixar sozinho: a extensão só precisa entregar a URL resolvida.
+    const url = `${API_ARQUIVOS_SKOOL}/${encodeURIComponent(fileId)}/download-url?expire=28800`;
+    try {
+        const r = await fetch(url, { method: 'POST', credentials: 'include' });
+        if (!r.ok) { console.warn(`[Sifão] anexo ${fileId}: HTTP ${r.status}`); return ''; }
+        const link = (await r.text()).trim();
+        return /^https:\/\//.test(link) ? link : '';
+    } catch (e) {
+        console.warn(`[Sifão] falha ao resolver anexo ${fileId}:`, e);
+        return '';
     }
 }
 
@@ -405,16 +474,57 @@ async function enfileirarCurso(aulas, ctx, aoProgredir) {
     // (senão N fetches em rajada podem levar 429 e perder o texto em silêncio).
     const CONC_TEXTO = 4, RESPIRO_MS = 200;
     await mapConcorrente(aulas, CONC_TEXTO, async (aula) => {
-        if (!aula.desc && aula._id && ctx && ctx.buildId) {
-            const t = await buscarTextoDaAula(aula._id, ctx);
+        // No modo COMUNIDADE cada aula vem de um curso diferente, então o ctx viaja
+        // junto com a aula (`_ctx`). Buscar o texto com o ctx da aba mandaria o
+        // `course` errado no request e o texto voltaria vazio, em silêncio.
+        // No modo curso único não há `_ctx` e todas compartilham o ctx da aba.
+        const ctxAula = aula._ctx || ctx;
+        // Busca se falta o texto OU se há vídeo do Skool ainda sem URL resolvida.
+        // Sem a segunda condição, uma aula que já tivesse `desc` pularia o fetch e
+        // o vídeo dela nunca seria descoberto — some sem aviso.
+        const faltaVideo = !!aula._videoId && !aula.url;
+        if ((!aula.desc || faltaVideo) && aula._id && ctxAula && ctxAula.buildId) {
+            const t = await buscarTextoDaAula(aula._id, ctxAula, aula._videoId);
             if (t.desc) aula.desc = t.desc;
             if (t.resources && !pareceResources(aula.resources)) aula.resources = t.resources;
+            if (t.urlVideo && !aula.url) aula.url = t.urlVideo;
             await new Promise(r => setTimeout(r, RESPIRO_MS));   // respiro anti-flood
         }
         if (aula.desc || pareceResources(aula.resources)) comTexto++;
         textos++;
         if (aoProgredir) aoProgredir('texto', textos, n);
     });
+
+    // Fase 1.5: resolve os ARQUIVOS anexos. Cada um exige um POST ao Skool, então vai
+    // com concorrência baixa e respiro, igual à fase de texto. A URL assinada dura ~8h
+    // (expire=28800) — folgado para uma fila que leva horas, mas o servidor avisa alto
+    // se ela vencer.
+    const comAnexo = [];
+    for (const aula of aulas) {
+        const lista = anexosDeResources(aula.resources);
+        if (lista.length) { aula._anexos = lista; comAnexo.push(aula); }
+    }
+    if (comAnexo.length) {
+        const totalAnexos = comAnexo.reduce((soma, a) => soma + a._anexos.length, 0);
+        let feitos = 0;
+        console.log(`[Sifão] resolvendo ${totalAnexos} anexo(s) em ${comAnexo.length} aula(s)…`);
+        await mapConcorrente(comAnexo, 3, async (aula) => {
+            const resolvidos = [];
+            for (const anexo of aula._anexos) {
+                const url = await resolverUrlAnexo(anexo.fileId);
+                if (url) resolvidos.push({ nome: anexo.nome, url });
+                feitos++;
+                if (aoProgredir) aoProgredir('anexos', feitos, totalAnexos);
+                await new Promise(r => setTimeout(r, RESPIRO_MS));
+            }
+            aula.anexos = resolvidos;
+        });
+        const perdidos = comAnexo.reduce(
+            (s, a) => s + (a._anexos.length - (a.anexos || []).length), 0);
+        if (perdidos) {
+            console.warn(`[Sifão] ⚠️ ${perdidos} anexo(s) não resolveram e não serão baixados.`);
+        }
+    }
 
     // Fase 2: envia os pedidos ao servidor LOCAL. Cada POST é independente e o servidor
     // responde na hora, fazendo o próprio enfileiramento (ThreadPoolExecutor). É
@@ -431,6 +541,7 @@ async function enfileirarCurso(aulas, ctx, aoProgredir) {
                     filename: aula.filename,
                     desc: aula.desc,
                     resources: aula.resources,
+                    anexos: aula.anexos || [],
                 }),
             });
         } catch (err) {
@@ -441,7 +552,184 @@ async function enfileirarCurso(aulas, ctx, aoProgredir) {
     });
 
     console.log(`[Loom] textos capturados: ${comTexto}/${n} aulas`);
+
+    // Vídeo do Skool que não resolveu vira aula só-texto no servidor. Isso é uma
+    // PERDA de vídeo — e perda silenciosa é o que este projeto mais evita. Avisa.
+    const naoResolvidos = aulas.filter(a => a._videoId && !a.url);
+    if (naoResolvidos.length) {
+        console.warn(`[Sifão] ⚠️ ${naoResolvidos.length} vídeo(s) do Skool não resolveram ` +
+                     `(sem playbackToken) e vão sem .mp4:`,
+                     naoResolvidos.map(a => a.filename));
+    }
     return enviadas;
+}
+
+// --- 1.7. CRAWLER DA COMUNIDADE INTEIRA ---
+// Na listagem (/{grupo}/classroom) não há curso na URL, então todo o caminho do
+// crawler de curso único não se aplica. Aqui listamos os cursos da comunidade e
+// buscamos a árvore de CADA um, reaproveitando extrairAulas() sem alteração.
+
+function ehPaginaComunidade() {
+    // A listagem é /{grupo}/classroom SEM slug de curso depois.
+    const { group, course } = slugsDaUrl();
+    return !!group && !course && /\/classroom\/?$/.test(location.pathname);
+}
+
+async function buscarPagePropsDeCurso(slug, buildId, group) {
+    // MEDIDO: pedir o curso sem `md` NÃO devolve o curso. O Skool responde 200 com um
+    // corpo de redirect — {"pageProps":{"__N_REDIRECT":"...?md=<primeira aula>"}} —
+    // porque a rota do curso sempre aponta para uma aula. Só relendo com esse `md` é
+    // que vem pageProps.course. (Dentro de um curso isso nunca aparecia: a URL já
+    // trazia o md.) Seguimos o salto no máximo 2× para não girar em falso.
+    if (!slug || !buildId || !group) return null;
+    const base = `${location.origin}/_next/data/${buildId}/${group}/classroom/${slug}.json`;
+    let q = `group=${encodeURIComponent(group)}&course=${encodeURIComponent(slug)}`;
+
+    for (let salto = 0; salto < 3; salto++) {
+        try {
+            const r = await fetch(`${base}?${q}`, {
+                credentials: 'include', headers: { 'x-nextjs-data': '1' },
+            });
+            if (!r.ok) { console.warn(`[Sifão] curso ${slug}: HTTP ${r.status}`); return null; }
+            const json = await r.json();
+            const pp = json.pageProps || (json.props && json.props.pageProps);
+
+            if (pp && pp.__N_REDIRECT) {
+                const md = new URL(pp.__N_REDIRECT, location.origin).searchParams.get('md');
+                if (!md) { console.warn(`[Sifão] curso ${slug}: redirect sem md`); return null; }
+                q = `group=${encodeURIComponent(group)}&course=${encodeURIComponent(slug)}` +
+                    `&md=${encodeURIComponent(md)}`;
+                continue;
+            }
+            if (pp && pp.course) return pp;
+            console.warn(`[Sifão] curso ${slug}: resposta sem pageProps.course`);
+            return null;
+        } catch (e) {
+            console.warn(`[Sifão] falha ao buscar curso ${slug}:`, e);
+            return null;
+        }
+    }
+    console.warn(`[Sifão] curso ${slug}: redirects demais`);
+    return null;
+}
+
+async function listarCursosDaComunidade() {
+    // Busca a listagem FRESCA pelo mesmo motivo do curso único (content.js:204): o
+    // __NEXT_DATA__ é o SSR do primeiro load e, após navegação SPA, listaria os cursos
+    // da comunidade ANTERIOR.
+    const nd = obterNextData();
+    const buildId = nd && nd.buildId;
+    const { group } = slugsDaUrl();
+    if (!buildId || !group) return null;
+
+    let pp = null;
+    const url = `${location.origin}/_next/data/${buildId}/${group}/classroom.json` +
+                `?group=${encodeURIComponent(group)}`;
+    try {
+        const r = await fetch(url, { credentials: 'include', headers: { 'x-nextjs-data': '1' } });
+        if (r.ok) {
+            const json = await r.json();
+            pp = json.pageProps || (json.props && json.props.pageProps);
+        } else {
+            console.warn(`[Sifão] listagem HTTP ${r.status}; tentando cache local.`);
+        }
+    } catch (e) {
+        console.warn('[Sifão] falha ao listar cursos; tentando cache local:', e);
+    }
+
+    // Fallback: só aceita o cache local se ele for COMPROVADAMENTE desta comunidade.
+    if (!pp || !pp.allCourses) {
+        const local = nd.props && nd.props.pageProps;
+        const grupoLocal = nd.query && nd.query.group;
+        pp = (local && local.allCourses && grupoLocal === group) ? local : null;
+    }
+    if (!pp || !pp.allCourses) {
+        console.warn('[Sifão] não achei a lista de cursos — recarregue a página (F5).');
+        return null;
+    }
+
+    const cg = pp.currentGroup || {};
+    const comunidade = (cg.metadata && cg.metadata.displayName) || cg.name || 'Skool';
+
+    // MEDIDO: cursos sem acesso vêm com hasAccess != 1 e, no JSON deles, NENHUMA aula
+    // tem videoLink — o Skool remove os vídeos no servidor. Baixá-los renderia zero
+    // arquivos e só gastaria requests, então saem da fila e são relatados no fim.
+    const liberados = [], bloqueados = [];
+    for (const c of pp.allCourses) {
+        const m = c.metadata || {};
+        const item = { slug: c.name, titulo: m.title || c.name, aulas: m.numModules || 0 };
+        if (m.hasAccess === 1) liberados.push(item); else bloqueados.push(item.titulo);
+    }
+    return { buildId, group, comunidade, cursos: liberados, bloqueados };
+}
+
+async function contextoComunidade() {
+    // Para o popup. `numModules` é a contagem real de aulas (medido: soma dos
+    // acessíveis = 280, idêntico à varredura das árvores), então o total sai na hora,
+    // sem precisar varrer os cursos antes de o usuário confirmar.
+    if (!ehPaginaComunidade()) return { ok: false };
+    const info = await listarCursosDaComunidade();
+    if (!info || !info.cursos.length) return { ok: false };
+    return {
+        ok: true,
+        comunidade: info.comunidade,
+        cursos: info.cursos.length,
+        bloqueados: info.bloqueados.length,
+        aulas: info.cursos.reduce((a, c) => a + c.aulas, 0),
+    };
+}
+
+async function enfileirarComunidadeDaAba(aoProgredir) {
+    if (enfileirandoEmAndamento) return { ok: false, motivo: 'ocupado' };
+
+    // O guarda cobre a varredura TAMBÉM: ela leva alguns segundos e um F5 no meio
+    // perderia o trabalho todo (mesma razão do guarda no curso único).
+    enfileirandoEmAndamento = true;
+    try {
+        const info = await listarCursosDaComunidade();
+        if (!info || !info.cursos.length) return { ok: false, motivo: 'vazio' };
+
+        // Fase 0: árvore de cada curso. Concorrência 3 + respiro: medido em 7,8s para
+        // 11 cursos, sem rate-limit. Subir isso é arriscar 429 e perder curso calado.
+        const CONC_CURSO = 3, RESPIRO_MS = 150;
+        const todas = [], falharam = [];
+        let lidos = 0;
+
+        await mapConcorrente(info.cursos, CONC_CURSO, async (c) => {
+            const pp = await buscarPagePropsDeCurso(c.slug, info.buildId, info.group);
+            if (!pp) {
+                falharam.push(c.titulo);
+            } else {
+                const aulas = extrairAulas(pp);
+                // Cada aula carrega o ctx do SEU curso: a fase de texto do
+                // enfileirarCurso busca por aula, e o curso varia entre elas.
+                for (const a of aulas) {
+                    a._ctx = { buildId: info.buildId, group: info.group, course: c.slug };
+                }
+                todas.push(...aulas);
+            }
+            lidos++;
+            if (aoProgredir) aoProgredir('cursos', lidos, info.cursos.length);
+            await new Promise(r => setTimeout(r, RESPIRO_MS));
+        });
+
+        if (!todas.length) return { ok: false, motivo: 'vazio' };
+
+        const comVideo = todas.filter(a => a._temVideo).length;
+        console.log(`[Sifão] === comunidade ${info.comunidade}: ${info.cursos.length} cursos, ` +
+                    `${todas.length} aulas (${comVideo} com vídeo) ===`);
+
+        // ctx da aba = null: cada aula já traz o seu.
+        const enviadas = await enfileirarCurso(todas, null, aoProgredir);
+        return {
+            ok: true, enviadas,
+            cursos: info.cursos.length,
+            bloqueados: info.bloqueados,
+            falharam,
+        };
+    } finally {
+        enfileirandoEmAndamento = false;
+    }
 }
 
 // --- 2. COMPONENTE DE DOWNLOAD (pill unificado) ---
@@ -564,6 +852,16 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
     if (msg.tipo === 'sifao:baixarCurso') {
         // Progresso vai pro popup (se ainda aberto); o enfileiramento roda aqui.
         enfileirarCursoDaAba((fase, i, n) => {
+            try { chrome.runtime.sendMessage({ tipo: 'sifao:progresso', fase, i, n }); } catch (e) {}
+        }).then(sendResponse).catch(() => sendResponse({ ok: false, motivo: 'erro' }));
+        return true;
+    }
+    if (msg.tipo === 'sifao:contextoComunidade') {
+        contextoComunidade().then(sendResponse).catch(() => sendResponse({ ok: false }));
+        return true;
+    }
+    if (msg.tipo === 'sifao:baixarComunidade') {
+        enfileirarComunidadeDaAba((fase, i, n) => {
             try { chrome.runtime.sendMessage({ tipo: 'sifao:progresso', fase, i, n }); } catch (e) {}
         }).then(sendResponse).catch(() => sendResponse({ ok: false, motivo: 'erro' }));
         return true;
@@ -727,6 +1025,126 @@ function criarBotaoLoomNativo() {
     alvo.appendChild(btn);
 }
 
+// --- 2.8. BOTÃO DE VÍDEO HOSPEDADO NO SKOOL ---
+// Aula com `videoId` não tem iframe (o player é Mux via MediaSource), então nenhum
+// dos botões anteriores nascia nela — dava para baixar só pelo curso inteiro.
+// Aqui detectamos a aula aberta e ancoramos o pill sobre o player.
+
+let _skoolVideoTentado = '';   // md já processado, para o observador não refazer fetch
+
+function acharPlayerSkool() {
+    // MEDIDO: antes do play não existe <video> NEM <img> — a thumbnail do Mux entra
+    // como `background-image` de uma div. Procurar por `img[src*=...]` (a primeira
+    // tentativa) nunca casava, e o pill caía no fallback do canto da tela.
+    for (const el of document.querySelectorAll('div,span,section')) {
+        if (el.offsetWidth < 240 || el.offsetHeight < 120) continue;
+        const bg = getComputedStyle(el).backgroundImage;
+        if (bg && bg !== 'none' && bg.includes('image.video.skool.com')) return el;
+    }
+
+    // Depois do play o <video> existe: sobe até o primeiro ancestral com tamanho.
+    const video = document.querySelector('video');
+    if (video) {
+        let p = video.parentElement;
+        while (p && (p.offsetWidth === 0 || p.offsetHeight === 0)) p = p.parentElement;
+        if (p) return p;
+    }
+
+    // Último recurso: a caixa 16:9 do player (medida em 657x369 = 1.78).
+    let melhor = null;
+    for (const el of document.querySelectorAll('div')) {
+        const w = el.offsetWidth, h = el.offsetHeight;
+        if (w < 300 || h < 160) continue;
+        const razao = w / h;
+        if (razao > 1.72 && razao < 1.83) {
+            if (!melhor || w < melhor.offsetWidth) melhor = el;   // o mais interno
+        }
+    }
+    return melhor;
+}
+
+async function criarBotaoVideoSkool() {
+    const md = new URLSearchParams(location.search).get('md');
+    if (!md || !/\/classroom\//.test(location.pathname)) return;
+    if (_skoolVideoTentado === md) return;        // já resolvido/descartado nesta aula
+    if (document.getElementById('sf-skool')) return;
+
+    _skoolVideoTentado = md;                      // marca ANTES do await: o observador
+                                                  // dispara muitas vezes por segundo e
+                                                  // sem isto viraria enxurrada de fetch.
+    const pp = await obterPagePropsDoCurso();
+    if (!pp || !pp.course) return;
+    const unit = coletarUnits(pp.course)[md];
+    if (!unit) return;
+    const meta = metaDe(unit) || {};
+    if (meta.videoLink || !meta.videoId) return;  // Loom/YouTube já têm o seu botão
+
+    if (document.getElementById('sf-skool')) return;
+    const alvo = acharPlayerSkool();
+    const btn = criarPill('Baixar vídeo', !alvo);   // sem player achado, vai pro canto
+    btn.id = 'sf-skool';
+
+    btn.onclick = async () => {
+        if (btn.disabled) return;
+        btn.disabled = true;
+        btn._lab.textContent = 'Resolvendo…';
+
+        // O par playbackId+token só existe no JSON da aula aberta, e expira (~24h),
+        // então resolvemos no clique — nunca guardamos um token velho.
+        const ctx = obterContexto();
+        const t = await buscarTextoDaAula(md, ctx, String(meta.videoId));
+        const dados = (await dadosDaAulaAtual()) || obterDadosDaPagina();
+
+        if (!t.urlVideo) {
+            console.warn('[Sifão] não consegui resolver o vídeo do Skool para', md);
+            btn.classList.add('sf-pill--err');
+            btn._lab.textContent = 'Falhou — recarregue (F5)';
+            setTimeout(() => {
+                btn.disabled = false;
+                btn.classList.remove('sf-pill--err');
+                btn._lab.textContent = 'Baixar vídeo';
+            }, 5000);
+            return;
+        }
+
+        btn._lab.textContent = 'Enviando…';
+        try {
+            const r = await fetch(SERVIDOR, {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({
+                    url: t.urlVideo,
+                    folder: dados.folder,
+                    filename: dados.filename,
+                    desc: t.desc || '',
+                    resources: t.resources || '',
+                }),
+            });
+            await r.json();
+            btn._lab.textContent = 'Na fila';
+        } catch (e) {
+            console.error('[Sifão] servidor offline?', e);
+            btn.classList.add('sf-pill--err');
+            btn._lab.textContent = 'Servidor offline?';
+        }
+        setTimeout(() => {
+            btn.disabled = false;
+            btn.classList.remove('sf-pill--err');
+            btn._lab.textContent = 'Baixar vídeo';
+        }, 4000);
+    };
+
+    if (alvo) {
+        // Overlay DENTRO do container do player (mesmo padrão do Loom nativo).
+        // ancorarPillNoIframe não serve aqui: ela insere como IRMÃO do elemento,
+        // o que colocaria o pill ao lado do player em vez de sobre ele.
+        if (getComputedStyle(alvo).position === 'static') alvo.style.position = 'relative';
+        alvo.appendChild(btn);
+    } else {
+        document.body.appendChild(btn);
+    }
+}
+
 // --- 3. OBSERVADORES (O VIGIA) ---
 
 function iniciarObservador() {
@@ -746,6 +1164,9 @@ function iniciarObservador() {
         criarBotaoVimeo();
         // Botão do Loom nativo (página do próprio loom.com/share|embed).
         criarBotaoLoomNativo();
+        // Botão de vídeo hospedado no Skool (aula com videoId, sem iframe).
+        // É assíncrono e se auto-limita por `md`, então não floda o observador.
+        criarBotaoVideoSkool();
     });
     
     // Começa a vigiar o corpo da página
@@ -756,6 +1177,7 @@ function iniciarObservador() {
 iniciarObservador();
 criarBotaoVimeo();
 criarBotaoLoomNativo();
+criarBotaoVideoSkool();
 
 // Guarda contra perder aulas: se o usuário recarregar ou fechar a aba ENQUANTO o
 // curso está sendo enfileirado, o navegador mostra o aviso nativo de "sair da

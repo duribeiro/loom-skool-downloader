@@ -36,6 +36,8 @@
   .ctx{ background:var(--surface); border:1px solid var(--line); border-radius:var(--radius-sm); padding:12px; }
   .ctx .k{ font-size:10px; text-transform:uppercase; letter-spacing:.12em; color:var(--faint); font-family:var(--mono); }
   .ctx .v{ font-size:14px; font-weight:700; margin:3px 0 10px; }
+  .ctx .sub{ font-size:11.5px; color:var(--muted); margin:-6px 0 10px; line-height:1.45; }
+  .btn.mini{ margin-top:7px; padding:8px; font-size:12px; font-weight:600; }
 
   .field label{ display:block; font-size:10px; text-transform:uppercase; letter-spacing:.1em;
                 color:var(--faint); font-family:var(--mono); margin-bottom:6px; }
@@ -52,8 +54,23 @@
   .btn svg{ width:16px; height:16px; }
   .btn.ghost{ background:transparent; color:var(--ink); border:1px solid var(--line); box-shadow:none; }
 
+  /* Atalho discreto: colar link é o caso RARO (o normal é baixar da aba atual),
+     então ele fica recolhido atrás deste botão em vez de ocupar o popup inteiro. */
+  .link-toggle{ display:flex; align-items:center; gap:8px; width:100%; padding:9px 11px;
+                border:1px solid var(--line); border-radius:var(--radius-sm);
+                background:transparent; color:var(--muted); cursor:pointer;
+                font-family:var(--sans); font-size:12.5px; font-weight:650; }
+  .link-toggle:hover{ color:var(--ink); border-color:var(--faint); }
+  .link-toggle svg{ width:17px; height:17px; flex:none; }
+
+  /* ATENÇÃO à especificidade: `#blocoColar{display:flex}` (0,1,0,0) VENCE
+     `.hidden{display:none}` (0,0,1,0), e o bloco nunca ficava escondido.
+     Por isso o estado colapsado é declarado no próprio ID. */
+  #blocoColar{ display:flex; flex-direction:column; gap:10px; }
+  #blocoColar.hidden{ display:none; }
+
   .divider{ height:1px; background:var(--line); }
-  .hint{ font-size:11.5px; color:var(--muted); min-height:15px; }
+  .hint{ font-size:11.5px; color:var(--muted); min-height:15px; white-space:pre-line; line-height:1.5; }
   .hidden{ display:none; }
 </style>
 </head>
@@ -78,14 +95,32 @@
       </button>
     </div>
 
-    <div class="field">
-      <label for="url">Link do YouTube</label>
-      <input id="url" type="text" placeholder="https://youtube.com/watch?v=…" autocomplete="off">
+    <div id="ctxComunidade" class="ctx hidden">
+      <div class="k">Comunidade detectada na aba</div>
+      <div class="v" id="comuNome">—</div>
+      <div class="sub" id="comuResumo"></div>
+      <button class="btn" id="btnComu">
+        <svg viewBox="0 0 24 24" fill="none"><path d="M4 6h7M4 12h7M4 18h7" stroke="#fff" stroke-width="2" stroke-linecap="round"/><path d="M17 5v9.5" stroke="#fff" stroke-width="2" stroke-linecap="round"/><path d="M14 11.8 17 14.8 20 11.8" stroke="#fff" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/></svg>
+        <span id="btnComuTxt">Baixar todos os cursos</span>
+      </button>
+      <button class="btn ghost mini hidden" id="btnComuCancel">Cancelar</button>
     </div>
-    <button class="btn ghost" id="btnYt">
-      <svg viewBox="0 0 24 24" fill="none"><path d="M12 3v10.5" stroke="currentColor" stroke-width="2.2" stroke-linecap="round"/><path d="M7.5 9.5 12 14l4.5-4.5" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"/><path d="M6 19h12" stroke="currentColor" stroke-width="2.2" stroke-linecap="round"/></svg>
-      <span>Baixar vídeo colado</span>
+
+    <button class="link-toggle" id="btnAbrirColar">
+      <svg viewBox="0 0 24 24" fill="none"><rect x="1.5" y="5" width="21" height="14" rx="4.2" fill="#FF0033"/><path d="M10 8.9v6.2l5.4-3.1z" fill="#fff"/></svg>
+      <span>Baixar do YouTube — colar link</span>
     </button>
+
+    <div id="blocoColar" class="hidden">
+      <div class="field">
+        <label for="url">Link do YouTube</label>
+        <input id="url" type="text" placeholder="https://youtube.com/watch?v=…" autocomplete="off">
+      </div>
+      <button class="btn ghost" id="btnYt">
+        <svg viewBox="0 0 24 24" fill="none"><path d="M12 3v10.5" stroke="currentColor" stroke-width="2.2" stroke-linecap="round"/><path d="M7.5 9.5 12 14l4.5-4.5" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"/><path d="M6 19h12" stroke="currentColor" stroke-width="2.2" stroke-linecap="round"/></svg>
+        <span>Baixar vídeo colado</span>
+      </button>
+    </div>
 
     <div class="divider"></div>
     <div id="hint" class="hint"></div>
