@@ -56,6 +56,31 @@ def eh_pasta_de_aula(caminho):
                for f in itens if os.path.isfile(os.path.join(caminho, f)))
 
 
+PASTA_QUARENTENA = "_DUPLICADOS"
+
+
+def _inventario(caminho):
+    """{caminho relativo: tamanho} de tudo abaixo de `caminho`."""
+    itens = {}
+    for raiz, _, arquivos in os.walk(caminho):
+        for a in arquivos:
+            completo = os.path.join(raiz, a)
+            itens[os.path.relpath(completo, caminho)] = os.path.getsize(completo)
+    return itens
+
+
+def _eh_duplicata_segura(origem, destino):
+    """True se o destino já contém tudo o que a origem tem (nome + tamanho).
+
+    Conservador de propósito: só considera seguro quando NADA da origem falta no
+    destino. Se a origem tiver um arquivo exclusivo, ela não é descartável.
+    """
+    if not os.path.isdir(origem) or not os.path.isdir(destino):
+        return False
+    io_, id_ = _inventario(origem), _inventario(destino)
+    return all(id_.get(k) == v for k, v in io_.items())
+
+
 def promover(pasta_intrusa, executar):
     """Move tudo que está dentro da pasta intrusa para o nível de cima."""
     pai = os.path.dirname(pasta_intrusa)
@@ -65,7 +90,23 @@ def promover(pasta_intrusa, executar):
         origem = os.path.join(pasta_intrusa, nome)
         destino = os.path.join(pai, nome)
         if os.path.exists(destino):
-            print(f"      ⚠️  já existe no destino, mantido onde está: {nome}")
+            # Colisão: o mesmo conteúdo já existe fora (efeito de reorganização
+            # manual). Se o destino contém tudo o que está aqui, isto é duplicata
+            # pura — vai para QUARENTENA, não para a lixeira: em disco externo o
+            # delete não é reversível, e conferir depois é barato.
+            if _eh_duplicata_segura(origem, destino):
+                rel = os.path.relpath(origem, PASTA_OUTPUT)
+                quarentena = os.path.join(PASTA_OUTPUT, PASTA_QUARENTENA, rel)
+                print(f"      ♻️  duplicata -> {PASTA_QUARENTENA}: {nome}")
+                movidos += 1
+                if executar:
+                    os.makedirs(os.path.dirname(quarentena), exist_ok=True)
+                    try:
+                        os.replace(origem, quarentena)
+                    except OSError as erro:
+                        print(f"      ❌ falhou: {erro}")
+                continue
+            print(f"      ⚠️  existe fora mas com conteúdo diferente, mantido: {nome}")
             conflitos += 1
             continue
         print(f"      {nome}  ↑")

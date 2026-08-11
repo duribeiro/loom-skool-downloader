@@ -23,6 +23,12 @@ PASTA_OUTPUT = os.path.join(os.path.dirname(os.path.abspath(__file__)), "output"
 # "Aula 1 - Introdução.mp4" seria confundida com um anexo de "Aula 1".
 EXT_PRINCIPAIS = {".mp4", ".md"}
 
+# Pastas de serviço: não são biblioteca e não devem ser reorganizadas.
+# `_BENCH` recebe downloads do benchmark (mexer nela durante a medição corromperia
+# arquivos em escrita) e `_DUPLICADOS` é a quarentena, que existe justamente para
+# preservar os caminhos originais.
+IGNORAR = {"_BENCH", "_DUPLICADOS"}
+
 
 def _eh_pasta_de_aula(pasta):
     """True se a pasta JÁ é a pasta de uma aula (contém arquivo com o mesmo nome)."""
@@ -85,6 +91,9 @@ def migrar(executar=False):
     total_aulas = total_arquivos = conflitos = 0
 
     for raiz, subpastas, _ in os.walk(PASTA_OUTPUT):
+        # Poda as pastas de serviço antes de qualquer coisa.
+        subpastas[:] = [s for s in subpastas if s not in IGNORAR]
+
         grupos = _agrupar(raiz)
         if not grupos:
             continue
