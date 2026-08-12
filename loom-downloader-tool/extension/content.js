@@ -381,6 +381,62 @@ function extrairVideoSkool(pp, videoId) {
     return `https://${HOST_STREAM_SKOOL}/${v.playbackId}.m3u8?token=${v.playbackToken}`;
 }
 
+// --- VÍDEO QUE MORA NUM POST FIXADO ---
+// MEDIDO em 12/08/2026 na ai-makers (280 aulas): 52 aulas NÃO têm vídeo próprio
+// (`videoLink` e `videoId` nulos) e guardam o vídeo num POST FIXADO à aula —
+// 37 de 85 em "Office Hours com Well Pires" e 12 de 20 em "Founders Talk".
+// Para a extensão elas pareciam aulas vazias: viravam um .md placeholder e sumiam
+// sem nenhum aviso. Era a maior perda silenciosa do projeto, 18% do acervo.
+//
+// A pegadinha é o nome do campo: no post ele se chama `videoIds` — PLURAL. Não é
+// `videoLink` nem `videoId`, os dois únicos que a leitura da unit consultava.
+//
+// Onde cada coisa mora (medido, não suposto):
+//   - `pageProps.pinnedPosts` pertence à aula ABERTA, não à unit. Varrer a listagem
+//     do curso nunca acha: cada requisição só revela os pins de UMA aula.
+//   - o JSON da aula traz só o ID do vídeo; playbackId+playbackToken exigem buscar
+//     o post pelo slug que vem em `post.name`.
+
+function postsFixadosComVideo(pp) {
+    const pins = (pp && pp.pinnedPosts) || [];
+    const out = [];
+    for (const p of pins) {
+        const post = p && p.post;
+        const vid = post && post.metadata && post.metadata.videoIds;
+        if (vid && post.name) out.push({ slug: post.name, videoId: String(vid), titulo: (post.metadata.title || '') });
+    }
+    return out;
+}
+
+async function resolverVideoDePostFixado(pin, ctx) {
+    if (!pin || !ctx || !ctx.buildId || !ctx.group) return '';
+    const url = `${location.origin}/_next/data/${ctx.buildId}/${ctx.group}/${pin.slug}.json`;
+    try {
+        const r = await fetch(url, { credentials: 'include', headers: { 'x-nextjs-data': '1' } });
+        if (!r.ok) { console.warn(`[Sifão] post fixado ${pin.slug}: HTTP ${r.status}`); return ''; }
+        const pp = (await r.json()).pageProps || {};
+
+        // O objeto do vídeo não fica num caminho fixo do JSON, então varremos.
+        // Conferir `id === pin.videoId` é OBRIGATÓRIO: um post pode ter mais de um
+        // vídeo, e pegar o primeiro que aparecesse colaria o vídeo errado na aula —
+        // erro que ninguém nota até sentar para assistir.
+        let achado = null;
+        const visto = new Set();
+        (function varrer(o) {
+            if (!o || typeof o !== 'object' || achado || visto.has(o)) return;
+            visto.add(o);
+            if (o.id === pin.videoId && o.playbackId && o.playbackToken) { achado = o; return; }
+            for (const v of Object.values(o)) varrer(v);
+        })(pp);
+
+        if (!achado) { console.warn(`[Sifão] post ${pin.slug} não tem o vídeo ${pin.videoId}`); return ''; }
+        return `https://${HOST_STREAM_SKOOL}/${achado.playbackId}.m3u8?token=${achado.playbackToken}`;
+    } catch (e) {
+        console.warn(`[Sifão] falha ao ler o post fixado ${pin.slug}:`, e);
+        return '';
+    }
+}
+
 async function buscarTextoDaAula(md, ctx, videoId) {
     if (!md || !ctx || !ctx.buildId || !ctx.group || !ctx.course) return { desc: '', resources: '' };
     const q = `md=${encodeURIComponent(md)}&group=${encodeURIComponent(ctx.group)}` +
@@ -394,6 +450,8 @@ async function buscarTextoDaAula(md, ctx, videoId) {
         const out = extrairTextoParaMd(pp, md);
         // Mesma resposta, nenhum request a mais: o vídeo do Skool vem daqui.
         out.urlVideo = extrairVideoSkool(pp, videoId);
+        // E os posts fixados, que é onde mora o vídeo das aulas "vazias".
+        out.postsFixados = out.urlVideo ? [] : postsFixadosComVideo(pp);
         return out;
     } catch (e) {
         console.warn(`[Loom] falha ao buscar texto da aula ${md}:`, e);
@@ -483,11 +541,32 @@ async function enfileirarCurso(aulas, ctx, aoProgredir) {
         // Sem a segunda condição, uma aula que já tivesse `desc` pularia o fetch e
         // o vídeo dela nunca seria descoberto — some sem aviso.
         const faltaVideo = !!aula._videoId && !aula.url;
-        if ((!aula.desc || faltaVideo) && aula._id && ctxAula && ctxAula.buildId) {
+        // Aula SEM vídeo nenhum também precisa da busca: o vídeo dela pode estar num
+        // post fixado, e isso só aparece no JSON da aula aberta. Sem esta condição as
+        // 52 aulas órfãs eram puladas — o `desc` delas é um parágrafo vazio, que é
+        // string truthy, então `!aula.desc` dava false e nada era buscado.
+        const semVideoNenhum = !aula._temVideo && !aula.url;
+        if ((!aula.desc || faltaVideo || semVideoNenhum) && aula._id && ctxAula && ctxAula.buildId) {
             const t = await buscarTextoDaAula(aula._id, ctxAula, aula._videoId);
             if (t.desc) aula.desc = t.desc;
             if (t.resources && !pareceResources(aula.resources)) aula.resources = t.resources;
             if (t.urlVideo && !aula.url) aula.url = t.urlVideo;
+
+            // Último recurso: o vídeo está num post fixado à aula.
+            if (!aula.url && t.postsFixados && t.postsFixados.length) {
+                if (t.postsFixados.length > 1) {
+                    // MEDIDO: 1 aula em 280 tem 2 posts com vídeo. Baixamos o primeiro
+                    // (o modelo é um vídeo por aula), mas avisamos alto — perder o
+                    // segundo em silêncio seria repetir o bug que este bloco conserta.
+                    console.warn(`[Sifão] "${aula.filename}" tem ${t.postsFixados.length} posts com vídeo; ` +
+                                 `baixando só o primeiro ("${t.postsFixados[0].titulo}")`);
+                }
+                const urlPost = await resolverVideoDePostFixado(t.postsFixados[0], ctxAula);
+                if (urlPost) {
+                    aula.url = urlPost;
+                    console.log(`[Sifão] "${aula.filename}": vídeo recuperado do post fixado`);
+                }
+            }
             await new Promise(r => setTimeout(r, RESPIRO_MS));   // respiro anti-flood
         }
         if (aula.desc || pareceResources(aula.resources)) comTexto++;

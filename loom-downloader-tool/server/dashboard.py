@@ -294,7 +294,7 @@ NOME_PROGRAMA = "Sifão"
 # 4.0 e não 3.1: além das features novas (comunidade inteira, vídeo do Skool,
 # anexos), o LAYOUT DA SAÍDA mudou — aulas com 2+ arquivos passam a ter pasta
 # própria. Quem já tem biblioteca vê a estrutura mudar, e isso é quebra de contrato.
-VERSAO = "4.0"
+VERSAO = "4.1"
 
 # Cada bloco carrega UMA linha de respiro embaixo (ver _com_respiro). As alturas
 # abaixo já incluem essa linha — o orçamento da tela precisa contá-la, senão o

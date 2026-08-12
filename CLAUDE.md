@@ -22,6 +22,15 @@ Quatro origens de vídeo, cada uma com seu caminho:
 | Vimeo (inclusive privado do Skool) | `eh_url_vimeo` (`services/vimeo.py:13`) | yt-dlp + `Referer` |
 | Vídeo hospedado no Skool (Mux) | `eh_url_skool_video` (`services/skool.py:40`) | yt-dlp |
 
+**Uma quinta forma de CHEGAR no motor do Skool:** a aula não tem vídeo próprio e o
+vídeo mora num **post fixado** — campo `videoIds` (PLURAL) em
+`pinnedPosts[].post.metadata`. MEDIDO em 12/08/2026: **52 das 280 aulas** da
+ai-makers são assim (37 de 85 em "Office Hours com Well Pires", 12 de 20 em
+"Founders Talk"), e todas eram perdidas em silêncio — viravam só um `.md`
+placeholder. Resolvido por `resolverVideoDePostFixado` (`extension/content.js:411`).
+As armadilhas estão em `plan/video-em-post-fixado.md`; vale ler antes de mexer no
+enfileiramento.
+
 Além do vídeo, uma aula pode render um **`.md`** (descrição + recursos do Skool,
 `services/texto.py`) e **anexos** (`baixar_anexos`, `services/skool.py:117`).
 
