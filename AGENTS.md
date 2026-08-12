@@ -37,7 +37,7 @@ Cinco entradas, quatro motores:
 O post fixado é resolvido **na extensão**, não no servidor: a aula não tem
 `videoLink` nem `videoId`, e o vídeo mora em `pinnedPosts[].post.metadata.videoIds`.
 MEDIDO em 12/08/2026: **52 das 280 aulas** da ai-makers, todas perdidas em silêncio
-até então. Ver `loom-downloader-tool/plan/video-em-post-fixado.md`.
+até então. Ver `loom-downloader-tool/plan/feito/video-em-post-fixado.md (índice de tudo em `plan/README.md`)`.
 
 ## Servidor Python
 
@@ -75,7 +75,7 @@ SIFAO_DOWNLOADS_SIMULTANEOS=6 python server/app.py     # padrão: 4
 `_SIMULTANEOS` (`routes.py:42-45`) alimenta o `ThreadPoolExecutor` (`routes.py:47`).
 **O padrão 4 foi medido, não escolhido por intuição** — 19,8% mais rápido que 1, 2,5%
 mais rápido que 8 (que ainda travou uma rodada). Metodologia, ruído da máquina e
-conclusões refutadas em `loom-downloader-tool/plan/benchmark-concorrencia.md`.
+conclusões refutadas em `loom-downloader-tool/plan/feito/benchmark-concorrencia.md`.
 Paralelismo de **segmento** são 12 workers por aula (`downloader.py:298`) — as conexões
 reais são `nível × 12`.
 

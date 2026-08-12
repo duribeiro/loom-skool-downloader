@@ -152,7 +152,9 @@ Acompanhe o progresso no **dashboard do terminal**.
 $env:SIFAO_DOWNLOADS_SIMULTANEOS = 6 ; .\venv\Scripts\python.exe server\app.py
 ```
 
-O padrão é **4** — número **medido**, não chutado: 19,8% mais rápido que 1 e 2,5% mais rápido que 8, que ainda travou uma rodada. Metodologia e números em [`plan/benchmark-concorrencia.md`](plan/benchmark-concorrencia.md).
+O padrão é **4** — número **medido**, não chutado: 19,8% mais rápido que 1 e 2,5% mais rápido que 8, que ainda travou uma rodada. Metodologia e números em [`plan/feito/benchmark-concorrencia.md`](plan/feito/benchmark-concorrencia.md).
+
+> **Registro do projeto:** [`plan/`](plan/) guarda medições, decisões e pendências, separado em [`a-fazer/`](plan/a-fazer/) e [`feito/`](plan/feito/). O índice está em [`plan/README.md`](plan/README.md).
 
 ---
 

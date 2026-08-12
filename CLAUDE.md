@@ -28,7 +28,7 @@ vídeo mora num **post fixado** — campo `videoIds` (PLURAL) em
 ai-makers são assim (37 de 85 em "Office Hours com Well Pires", 12 de 20 em
 "Founders Talk"), e todas eram perdidas em silêncio — viravam só um `.md`
 placeholder. Resolvido por `resolverVideoDePostFixado` (`extension/content.js:411`).
-As armadilhas estão em `plan/video-em-post-fixado.md`; vale ler antes de mexer no
+As armadilhas estão em `plan/feito/video-em-post-fixado.md (índice de tudo em `plan/README.md`)`; vale ler antes de mexer no
 enfileiramento.
 
 Além do vídeo, uma aula pode render um **`.md`** (descrição + recursos do Skool,
@@ -63,7 +63,7 @@ Concorrência ajustável sem editar código (`routes.py:42-45`):
 SIFAO_DOWNLOADS_SIMULTANEOS=6 python server/app.py    # padrão: 4
 ```
 
-O padrão **4 foi medido, não chutado** — ver `loom-downloader-tool/plan/benchmark-concorrencia.md`.
+O padrão **4 foi medido, não chutado** — ver `loom-downloader-tool/plan/feito/benchmark-concorrencia.md`.
 
 Extensão: `chrome://extensions` → Modo desenvolvedor → "Carregar sem compactação" →
 selecionar `loom-downloader-tool/extension`.
