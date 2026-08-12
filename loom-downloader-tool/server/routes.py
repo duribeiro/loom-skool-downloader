@@ -47,6 +47,11 @@ except ValueError:
 
 executor = ThreadPoolExecutor(max_workers=_SIMULTANEOS)
 
+# Faixa da barra reservada para a CONVERSÃO. O download nunca chega a 100%: assim
+# a barra cheia significa "pronto", e não "esperando o ffmpeg". As faixas do
+# download (vídeo/áudio) estão em `services/ytdlp.py`.
+FAIXA_CONVERSAO = (85, 99)
+
 # --- 0. ORGANIZAÇÃO EM PASTA POR AULA ---
 # Uma aula pode render vários arquivos (mp4 + md + anexos). Soltos no módulo, eles
 # se misturam com os das aulas vizinhas. A partir de DOIS arquivos, a aula ganha
@@ -201,8 +206,18 @@ def worker_download(url, pasta_destino, nome_arquivo_sugerido, item_dashboard,
 
     # B. Função de Callback
     # O downloader chama isso a cada pedacinho baixado para atualizar a barra
-    def atualizar_progresso(total=None):
-        if total:
+    def atualizar_progresso(total=None, percentual=None):
+        # PERCENTUAL ABSOLUTO (0..100 da AULA inteira, não da faixa atual).
+        # Cada etapa ocupa uma faixa da barra — ver FAIXA_DA_FASE em ytdlp.py.
+        # Assim 100% passa a significar PRONTO, e só isso: antes a barra enchia no
+        # fim do vídeo e ficava parada em 100% durante áudio e conversão, dando a
+        # impressão de travamento. `max` porque barra que anda para trás parece
+        # trabalho perdido.
+        if percentual is not None:
+            item_dashboard['total'] = 100
+            item_dashboard['progresso'] = max(item_dashboard.get('progresso', 0),
+                                              min(100, int(percentual)))
+        elif total:
             # Total novo = FAIXA nova. O yt-dlp baixa vídeo e áudio como downloads
             # separados e reporta o total uma vez por faixa; sem zerar o progresso
             # junto, o contador do áudio seguia de onde o vídeo parou e a barra
@@ -218,6 +233,14 @@ def worker_download(url, pasta_destino, nome_arquivo_sugerido, item_dashboard,
     def marcar_convertendo():
         item_dashboard['status'] = 'convertendo'
         item_dashboard['eta'] = None      # o ffmpeg não estima; melhor nada que mentira
+        # Entra na faixa da conversão em vez de ficar nos 100% do download.
+        item_dashboard['total'] = 100
+        item_dashboard['progresso'] = max(item_dashboard.get('progresso', 0), FAIXA_CONVERSAO[0])
+
+    def marcar_progresso_conversao(fracao):
+        """0..1 dentro da faixa da conversão. Vem do `-progress` do ffmpeg."""
+        ini, fim = FAIXA_CONVERSAO
+        atualizar_progresso(percentual=ini + max(0.0, min(1.0, fracao)) * (fim - ini))
 
     # A FASE do yt-dlp (vídeo / áudio) e o tempo restante da faixa atual. Vídeo e
     # áudio são downloads separados: sem isto o painel dizia só "Baixando" e a barra
@@ -298,7 +321,8 @@ def worker_download(url, pasta_destino, nome_arquivo_sugerido, item_dashboard,
 
             if download_ok:
                 item_dashboard['status'] = 'convertendo'
-                if converter_final(nome_limpo, pasta_destino, caminho_pasta_temp):
+                if converter_final(nome_limpo, pasta_destino, caminho_pasta_temp,
+                           ao_progresso=marcar_progresso_conversao):
                     limpar_pasta(caminho_pasta_temp)
                     video_ok = True
 

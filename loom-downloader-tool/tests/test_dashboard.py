@@ -71,3 +71,39 @@ def test_barra_desenha_dentro_do_limite():
     for pct in (0, 1, 50, 99, 100):
         assert len(db._barra(pct)) == largura, f"largura mudou em {pct}%"
     assert db._barra(0) != db._barra(100)
+
+
+# --- FAIXAS DA BARRA ---------------------------------------------------------
+# Cada etapa ocupa um trecho da barra, em vez dos 100% inteiros. Assim 100% passa
+# a significar PRONTO — antes a barra enchia no fim do vídeo e ficava parada
+# durante áudio e conversão, dando impressão de travamento.
+
+import sys, os
+sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..', 'server'))
+from services.ytdlp import FAIXA_DA_FASE
+from routes import FAIXA_CONVERSAO
+
+
+def _pct(fase, fracao):
+    ini, fim = FAIXA_DA_FASE[fase]
+    return ini + fracao * (fim - ini)
+
+
+def test_faixas_cobrem_a_barra_em_ordem_e_sem_buraco():
+    assert FAIXA_DA_FASE['baixando video'][1] == FAIXA_DA_FASE['baixando audio'][0]
+    assert FAIXA_DA_FASE['baixando audio'][1] == FAIXA_CONVERSAO[0]
+    for ini, fim in list(FAIXA_DA_FASE.values()) + [FAIXA_CONVERSAO]:
+        assert 0 <= ini < fim <= 100
+
+
+def test_download_nunca_chega_a_100():
+    """100% tem que significar PRONTO. Download cheio ainda tem conversão pela frente."""
+    for fase in FAIXA_DA_FASE:
+        assert _pct(fase, 1.0) < 100, f"'{fase}' cheia marcaria 100% antes da hora"
+    assert FAIXA_CONVERSAO[1] < 100, "nem a conversão fecha em 100 sozinha"
+
+
+def test_barra_so_anda_para_frente_ao_trocar_de_etapa():
+    """Vídeo cheio nunca pode marcar mais que áudio começando."""
+    assert _pct('baixando video', 1.0) <= _pct('baixando audio', 0.0)
+    assert _pct('baixando audio', 1.0) <= FAIXA_CONVERSAO[0]
