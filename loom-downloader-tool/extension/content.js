@@ -1156,7 +1156,17 @@ async function criarBotaoVideoSkool() {
     const unit = coletarUnits(pp.course)[md];
     if (!unit) return;
     const meta = metaDe(unit) || {};
-    if (meta.videoLink || !meta.videoId) return;  // Loom/YouTube já têm o seu botão
+    if (meta.videoLink) return;                   // Loom/YouTube já têm o seu botão
+
+    // A aula pode não ter vídeo PRÓPRIO e guardar o vídeo num POST FIXADO. Antes a
+    // condição era `!meta.videoId` e essas aulas ficavam sem pill nenhum — o
+    // enfileiramento em massa as recuperava, mas quem abrisse a aula para baixar só
+    // ela não tinha botão. São 52 aulas na ai-makers, quase todas de Office Hours.
+    //
+    // `obterPagePropsDoCurso` já manda o `md` atual no request, e `pinnedPosts`
+    // pertence à aula ABERTA — então isto sai de graça, sem requisição a mais.
+    const pins = meta.videoId ? [] : postsFixadosComVideo(pp);
+    if (!meta.videoId && !pins.length) return;    // sem vídeo em lugar nenhum
 
     if (document.getElementById('sf-skool')) return;
     const alvo = acharPlayerSkool();
@@ -1171,8 +1181,15 @@ async function criarBotaoVideoSkool() {
         // O par playbackId+token só existe no JSON da aula aberta, e expira (~24h),
         // então resolvemos no clique — nunca guardamos um token velho.
         const ctx = obterContexto();
-        const t = await buscarTextoDaAula(md, ctx, String(meta.videoId));
+        const t = await buscarTextoDaAula(md, ctx, String(meta.videoId || ''));
         const dados = (await dadosDaAulaAtual()) || obterDadosDaPagina();
+
+        // Sem vídeo próprio, o vídeo vem do post fixado. Resolvemos aqui, no clique,
+        // pelo mesmo motivo do vídeo do Skool: o token expira (~24h) e guardá-lo
+        // adiantado só produziria um 403 na hora do download.
+        if (!t.urlVideo && pins.length) {
+            t.urlVideo = await resolverVideoDePostFixado(pins[0], ctx);
+        }
 
         if (!t.urlVideo) {
             console.warn('[Sifão] não consegui resolver o vídeo do Skool para', md);

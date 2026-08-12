@@ -131,13 +131,28 @@ def baixar_com_ytdlp(url, pasta_relativa_destino, nome_arquivo, callback=None,
         return True
 
     # Progresso: mapeia o percentual do yt-dlp para o callback de barra do dashboard.
-    estado = {"reportou_total": False, "ultimo_pct": 0}
+    estado = {"reportou_total": False, "ultimo_pct": 0, "faixa": None}
 
     def _hook(d):
         if not callback:
             return
         if d.get("status") != "downloading":
             return
+
+        # UMA BARRA, VÁRIAS FAIXAS. O yt-dlp baixa vídeo e áudio como downloads
+        # SEPARADOS, um depois do outro. Como `ultimo_pct` só cresce, a barra
+        # chegava a 100% no fim do vídeo e ficava CONGELADA lá durante todo o
+        # áudio e a junção — em vídeo longo isso são minutos parecendo travamento.
+        # RELATADO: 4 aulas de Office Hours em "100% baixando" sem sair do lugar,
+        # enquanto o disco mostrava 1,5 MB/s de progresso real.
+        # Faixa nova = barra reinicia. Voltar a 0 é feio, mas é honesto: mostra
+        # que há trabalho acontecendo, e o congelado dizia o oposto.
+        faixa = d.get("filename") or d.get("info_dict", {}).get("format_id")
+        if faixa != estado["faixa"]:
+            estado["faixa"] = faixa
+            estado["ultimo_pct"] = 0
+            estado["reportou_total"] = False
+
         if not estado["reportou_total"]:
             callback(total=100)
             estado["reportou_total"] = True
