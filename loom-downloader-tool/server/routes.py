@@ -1,4 +1,5 @@
 import os
+import traceback
 from flask import Blueprint, request, jsonify
 from concurrent.futures import ThreadPoolExecutor
 
@@ -98,6 +99,30 @@ def _adotar_arquivos_soltos(pasta_pai_abs, pasta_aula_abs, nome_limpo):
     if movidos:
         print(f"📁 {movidos} arquivo(s) já baixado(s) movido(s) para a pasta de '{nome_limpo}'")
     return movidos
+
+
+def _worker_blindado(url, pasta_destino, nome_arquivo_sugerido, item_dashboard,
+                     desc=None, resources=None, referer=None, anexos=None):
+    """Roda `worker_download` sem deixar exceção nenhuma sumir.
+
+    O `ThreadPoolExecutor` guarda a exceção no `Future` e só a mostra quando
+    alguém chama `.result()` — e ninguém chamava. Efeito medido no uso real: um
+    worker que estourava deixava o item preso em `status='baixando'` com 0% para
+    SEMPRE, enquanto a vaga era liberada e a fila seguia. O painel chegou a
+    mostrar 6 aulas "baixando" com só 4 vagas — duas eram cadáveres.
+
+    Isso é pior que uma falha barulhenta: a aula não baixa, não acusa erro, e o
+    número de ativos mente. Aqui a exceção vira status 'erro' e traceback no
+    terminal, que é o mínimo para alguém poder investigar.
+    """
+    try:
+        worker_download(url, pasta_destino, nome_arquivo_sugerido, item_dashboard,
+                        desc, resources, referer, anexos)
+    except BaseException as erro:
+        item_dashboard['status'] = 'erro'
+        nome = item_dashboard.get('nome') or nome_arquivo_sugerido or '?'
+        print(f"\n❌ WORKER MORREU em '{nome}': {type(erro).__name__}: {erro}")
+        traceback.print_exc()
 
 
 # --- 1. A LÓGICA DO TRABALHADOR (WORKER) ---
@@ -312,7 +337,7 @@ def rota_receber_pedido():
     # O servidor responde "OK" imediatamente, sem esperar o download acabar.
     # desc/resources são opcionais: quando presentes, geram o .md da aula.
     executor.submit(
-        worker_download,
+        _worker_blindado,
         novo_item_dashboard['url'],
         novo_item_dashboard['folder'],
         novo_item_dashboard['nome'],

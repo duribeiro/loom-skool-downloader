@@ -165,6 +165,31 @@ def test_aula_loom_nao_vai_para_ytdlp(output_isolado, monkeypatch):
     assert item["status"] == "sucesso"
 
 
+def test_worker_que_estoura_vira_erro_e_nao_fica_baixando(monkeypatch, capsys):
+    """Exceção no worker tem que virar status 'erro', nunca 'baixando' eterno.
+
+    REGRESSÃO VISTA NA TELA: o `ThreadPoolExecutor` guarda a exceção no `Future`
+    e ninguém chamava `.result()`. Um worker que estourava deixava o item preso em
+    'baixando' com 0% para sempre, enquanto a vaga era liberada — o painel chegou
+    a mostrar 6 aulas "baixando" com só 4 vagas. Duas eram cadáveres.
+    """
+    def explode(*a, **k):
+        raise RuntimeError("boom no meio do download")
+
+    monkeypatch.setattr(routes, "worker_download", explode)
+
+    item = _item(url="https://www.loom.com/embed/abc")
+    item["status"] = "baixando"
+
+    # Não pode propagar: se propagar, o executor engole de novo e voltamos ao bug.
+    routes._worker_blindado(item["url"], item["folder"], item["nome"], item)
+
+    assert item["status"] == "erro", "o item ficaria preso em 'baixando' para sempre"
+    saida = capsys.readouterr().out
+    assert "WORKER MORREU" in saida and "boom no meio do download" in saida, \
+        "a falha precisa ser VISÍVEL no terminal, não só mudar o status"
+
+
 def test_barra_nao_passa_de_100_entre_faixas(output_isolado, monkeypatch):
     """Vídeo e áudio são downloads SEPARADOS: a barra tem que zerar entre eles.
 
