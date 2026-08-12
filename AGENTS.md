@@ -31,7 +31,13 @@ Cinco entradas, quatro motores:
 | YouTube | `eh_url_youtube` (`services/youtube.py:9`) | yt-dlp |
 | Vimeo (inclusive privado do Skool) | `eh_url_vimeo` (`services/vimeo.py:13`) | yt-dlp + `Referer` |
 | Vídeo hospedado no Skool (Mux white-label) | `eh_url_skool_video` (`services/skool.py:40`) | yt-dlp |
+| Vídeo em **post fixado** (`videoIds`, plural) | `resolverVideoDePostFixado` (`extension/content.js:411`) | yt-dlp (mesma URL do Mux) |
 | Aula só de texto (`url` vazia) | — | grava só o `.md` |
+
+O post fixado é resolvido **na extensão**, não no servidor: a aula não tem
+`videoLink` nem `videoId`, e o vídeo mora em `pinnedPosts[].post.metadata.videoIds`.
+MEDIDO em 12/08/2026: **52 das 280 aulas** da ai-makers, todas perdidas em silêncio
+até então. Ver `loom-downloader-tool/plan/video-em-post-fixado.md`.
 
 ## Servidor Python
 
