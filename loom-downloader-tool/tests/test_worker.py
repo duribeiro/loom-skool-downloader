@@ -165,6 +165,43 @@ def test_aula_loom_nao_vai_para_ytdlp(output_isolado, monkeypatch):
     assert item["status"] == "sucesso"
 
 
+def test_barra_nao_passa_de_100_entre_faixas(output_isolado, monkeypatch):
+    """Vídeo e áudio são downloads SEPARADOS: a barra tem que zerar entre eles.
+
+    REGRESSÃO VISTA NA TELA: `atualizar_progresso(total=100)` definia o total mas
+    não zerava o progresso, então o contador do áudio seguia de onde o vídeo parou
+    e o painel mostrava 200% (barra verde cheia, número impossível).
+    """
+    vistos = []
+
+    def falso_ytdlp(url, pasta, nome, callback, **k):
+        # Faixa 1 (vídeo): reporta o total e enche a barra.
+        callback(total=100)
+        for _ in range(100):
+            callback()
+            vistos.append((item["progresso"], item["total"]))
+        # Faixa 2 (áudio): novo total — é aqui que o progresso tem que zerar.
+        callback(total=100)
+        vistos.append((item["progresso"], item["total"]))
+        for _ in range(100):
+            callback()
+            vistos.append((item["progresso"], item["total"]))
+        return True
+
+    monkeypatch.setattr(routes, "baixar_youtube", falso_ytdlp)
+    monkeypatch.setattr(routes, "limpar_pasta", lambda *a, **k: None)
+
+    item = _item(url="https://www.youtube.com/watch?v=abc")
+    routes.worker_download(item["url"], item["folder"], item["nome"], item, None, None)
+
+    assert vistos, "o dublê não chegou a ser chamado"
+    piores = [(p, t) for p, t in vistos if p > t]
+    assert not piores, f"progresso passou do total: {piores[:3]}"
+    # E zerou de verdade na troca de faixa, em vez de continuar de 100.
+    assert (0, 100) in vistos, "o progresso não zerou quando a faixa mudou"
+    assert item["progresso"] == 100
+
+
 def test_video_falha_status_erro(output_isolado, monkeypatch):
     """Se o texto grava mas o vídeo falha, o status reflete a falha do vídeo."""
     monkeypatch.setattr(routes, "extrair_metadados", lambda url: ("t", None))

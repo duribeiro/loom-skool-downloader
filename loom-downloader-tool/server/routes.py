@@ -178,7 +178,12 @@ def worker_download(url, pasta_destino, nome_arquivo_sugerido, item_dashboard,
     # O downloader chama isso a cada pedacinho baixado para atualizar a barra
     def atualizar_progresso(total=None):
         if total:
+            # Total novo = FAIXA nova. O yt-dlp baixa vídeo e áudio como downloads
+            # separados e reporta o total uma vez por faixa; sem zerar o progresso
+            # junto, o contador do áudio seguia de onde o vídeo parou e a barra
+            # marcava 200% — verde cheio com número absurdo. RELATADO no uso real.
             item_dashboard['total'] = total
+            item_dashboard['progresso'] = 0
         else:
             item_dashboard['progresso'] += 1
 

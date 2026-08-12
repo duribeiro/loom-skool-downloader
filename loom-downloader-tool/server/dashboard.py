@@ -260,9 +260,15 @@ def _gerar_tabela_ativos(itens, max_fila=5):
         percentual = 0
         if item.get('total', 0) > 0:
             percentual = int((item.get('progresso', 0) / item['total']) * 100)
+        # Trava de segurança. O 200% que apareceu na tela nasceu de progresso não
+        # zerado entre faixas — já corrigido na origem (`routes.atualizar_progresso`),
+        # mas número impossível no painel corrói a confiança em tudo que ele mostra.
+        percentual = max(0, min(100, percentual))
 
-        texto_status = (_ROTULO_STATUS.get(item.get('status'), "Baixando ⬇")
-                        + _formatar_eta(item.get('eta')))
+        # Só a fase. O tempo restante junto ("Baixando vídeo ⬇ · faltam 3m20s")
+        # estourava a largura da coluna e virava ruído. O `eta` continua no item
+        # para quem quiser uma coluna própria depois — aqui ele não entra.
+        texto_status = _ROTULO_STATUS.get(item.get('status'), "Baixando ⬇")
 
         table.add_row(
             f"[bold]{item.get('nome', '?')}[/]",
