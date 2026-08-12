@@ -94,6 +94,25 @@ function obterDadosDaPagina() {
 
 const SERVIDOR = 'http://localhost:5000/baixar';
 
+// CORPO DO PEDIDO, montado num lugar só.
+//
+// Havia três `JSON.stringify` de pill espalhados (Loom, Vimeo e vídeo do Skool) e
+// cada um mandava um conjunto diferente de campos: dois deles só {url, folder,
+// filename}, sem `desc`/`resources`. Por isso "baixar vídeo" nunca gerava .md.
+// Campo novo agora entra aqui e vale para os três de uma vez.
+//
+// `extras` vem por último de propósito: a URL e o `referer` são específicos de cada
+// origem, e o chamador pode sobrepor um campo quando tem um valor mais fresco.
+function corpoDoPedido(dados, extras) {
+    return JSON.stringify({
+        folder: dados.folder,
+        filename: dados.filename,
+        desc: dados.desc || '',
+        resources: dados.resources || '',
+        ...extras,
+    });
+}
+
 function obterNextData() {
     // __NEXT_DATA__ é uma tag <script> no DOM — o content script alcança.
     const tag = document.getElementById('__NEXT_DATA__');
@@ -213,24 +232,18 @@ async function obterPagePropsDoCurso() {
     if (buildId && group && course) {
         // Inclui o md atual da URL quando houver: deixa o request idêntico ao que o
         // Skool faz ao abrir a aula (o mesmo já comprovado em buscarTextoDaAula).
-        // A árvore de aulas não depende do md — ele só marca o módulo selecionado.
+        // A árvore de aulas não depende do md, mas `pinnedPosts` depende — ele é da
+        // aula ABERTA.
+        //
+        // Delega a `buscarPagePropsDeCurso` em vez de repetir o fetch aqui: era a
+        // ÚNICA das três buscas que não seguia `__N_REDIRECT`, então um slug não
+        // canônico (ou uma URL sem `md`) devolvia o payload de redirect, `pp.course`
+        // não vinha, e a função caía no __NEXT_DATA__ — que a navegação SPA deixa
+        // velho. Com a delegação, corrigir o redirect num lugar corrige nos três.
         const mdAtual = new URLSearchParams(location.search).get('md');
-        let q = `group=${encodeURIComponent(group)}&course=${encodeURIComponent(course)}`;
-        if (mdAtual) q += `&md=${encodeURIComponent(mdAtual)}`;
-        const url = `${location.origin}/_next/data/${buildId}/${group}/classroom/${course}.json?${q}`;
-        try {
-            const r = await fetch(url, { credentials: 'include', headers: { 'x-nextjs-data': '1' } });
-            if (r.ok) {
-                const json = await r.json();
-                const pp = json.pageProps || (json.props && json.props.pageProps);
-                if (pp && pp.course) return pp;
-                console.warn('[Loom] JSON fresco do curso sem pageProps.course; tentando cache local.');
-            } else {
-                console.warn(`[Loom] _next/data ${r.status} ao buscar curso atual; tentando cache local.`);
-            }
-        } catch (e) {
-            console.warn('[Loom] falha ao buscar curso fresco; tentando cache local:', e);
-        }
+        const pp = await buscarPagePropsDeCurso(course, buildId, group, mdAtual);
+        if (pp && pp.course) return pp;
+        console.warn('[Loom] JSON fresco do curso indisponível; tentando cache local.');
     }
     // Fallback: só confia no __NEXT_DATA__ se ele for COMPROVADAMENTE do curso ATUAL
     // (o slug `name` bate com o da URL). Se não bater — ou não houver slug na URL — o
@@ -282,7 +295,37 @@ function extrairAulas(pp) {
         // Todo o resto é folha e ENTRA, seja qual for o unitType: assim uma aula
         // de texto (unitType diferente de 'module') não some em silêncio.
         if (CONTAINERS.has(unit.unitType)) continue;
+        aulas.push(pacoteDaAula(unit, porId, comunidade));
+    }
 
+    // DIAGNÓSTICO POR MÓDULO — não é enfeite.
+    //
+    // Em 12/08/2026 um módulo inteiro ("Dia 1" do Bootcamp Mês 1) foi apagado de
+    // propósito e NÃO voltou no "baixar tudo". Zero arquivos escritos, e o painel
+    // agrupa por CURSO — então não havia como saber se o módulo tinha sido coletado
+    // e não enviado, ou nem coletado. A contagem por módulo separa os dois casos em
+    // uma olhada, sem precisar instrumentar de novo depois do problema aparecer.
+    const porModulo = {};
+    for (const a of aulas) {
+        const modulo = a.folder.split('/').slice(-1)[0] || '(sem modulo)';
+        porModulo[modulo] = (porModulo[modulo] || 0) + 1;
+    }
+    console.log(`[Sifão] coletadas ${aulas.length} aulas em ${Object.keys(porModulo).length} módulos:`,
+                porModulo);
+
+    return aulas;
+}
+
+// FONTE ÚNICA do pedido de uma aula: pasta, nome, texto e marcas de vídeo.
+//
+// Os TRÊS botões (comunidade inteira, curso único e o pill sobre o player) passam
+// por aqui. Antes só os dois primeiros passavam: o pill montava a pasta parseando o
+// `document.title` em `obterDadosDaPagina` (:15), que produz apenas
+// `Comunidade/Curso` — SEM o nível do módulo — e postava só {url, folder, filename},
+// nunca `desc`/`resources`. Resultado medido: "baixar vídeo" jamais gerava .md, e
+// gravava num caminho diferente do que os outros dois botões usariam para a MESMA
+// aula. Duas fontes de verdade para a mesma pasta divergem por construção.
+function pacoteDaAula(unit, porId, comunidade) {
         const meta = metaDe(unit) || {};
         const videoLink = meta.videoLink || '';
         const ehLoom = /loom\.com\/(embed|share)\//.test(videoLink);
@@ -321,7 +364,7 @@ function extrairAulas(pp) {
             .map(limparTexto)
             .join('/');
 
-        aulas.push({
+        return {
             url: ehLink ? videoLink : '',   // do Skool, a URL só nasce na fase 1
             folder: pasta,
             filename: limparTexto(meta.title || 'Aula sem titulo'),
@@ -332,9 +375,7 @@ function extrairAulas(pp) {
             _temTexto: temTexto,
             _unitType: unit.unitType,
             _id: unit.id,   // = o "md" da aula; usado para buscar o texto individual
-        });
-    }
-    return aulas;
+        };
 }
 
 // --- 1.6. TEXTO POR AULA (via endpoint de dados do Next.js do Skool) ---
@@ -446,7 +487,46 @@ async function buscarTextoDaAula(md, ctx, videoId) {
         const r = await fetch(url, { credentials: 'include', headers: { 'x-nextjs-data': '1' } });
         if (!r.ok) { console.warn(`[Loom] _next/data ${r.status} para md ${md}`); return { desc: '', resources: '' }; }
         const json = await r.json();
-        const pp = json.pageProps || (json.props && json.props.pageProps);
+        let pp = json.pageProps || (json.props && json.props.pageProps);
+
+        // __N_REDIRECT: o Skool responde 200 com um PAYLOAD DE REDIRECT quando o
+        // slug do curso não é o canônico (o UUID longo de `allCourses` redireciona
+        // para um slug curto). Sem seguir, `pp` vem só com o redirect, o texto
+        // volta VAZIO e a aula perde o .md — e sem .md o servidor prevê 1 arquivo,
+        // não cria a pasta da aula, procura o .mp4 no lugar errado e rebaixa tudo.
+        // MEDIDO em 12/08/2026: /classroom/c385f0c5….json -> /classroom/1d46e489?md=…
+        //
+        // O `md` PEDIDO tem que ser preservado: o redirect traz o md da aula PADRÃO
+        // do curso, e reaproveitá-lo devolve o texto da aula ERRADA.
+        //
+        // A QUERY É REMONTADA com o slug canônico. Antes o `q` era reaproveitado
+        // inteiro, e ele carrega `course=<slug antigo>` — o mesmo slug que acabou de
+        // redirecionar. O servidor lê esse parâmetro, então a releitura redirecionava
+        // de novo, os 2 saltos se esgotavam e `extrairTextoParaMd` devolvia texto
+        // VAZIO **sem um único aviso** — exatamente a falha silenciosa que este bloco
+        // veio consertar.
+        let salto = 0;
+        for (; pp && pp.__N_REDIRECT && salto < 2; salto++) {
+            const alvo = String(pp.__N_REDIRECT).match(/classroom\/([^?]+)/);
+            if (!alvo) break;
+            const slugCanonico = alvo[1];
+            const qCanonico = `group=${encodeURIComponent(ctx.group)}` +
+                `&course=${encodeURIComponent(slugCanonico)}` +
+                `&md=${encodeURIComponent(md)}`;
+            const rr = await fetch(
+                `${location.origin}/_next/data/${ctx.buildId}/${ctx.group}/classroom/${slugCanonico}.json?${qCanonico}`,
+                { credentials: 'include', headers: { 'x-nextjs-data': '1' } });
+            if (!rr.ok) {
+                console.warn(`[Sifão] aula ${md}: HTTP ${rr.status} ao seguir o redirect`);
+                break;
+            }
+            const jj = await rr.json();
+            pp = jj.pageProps || (jj.props && jj.props.pageProps);
+        }
+        // Desistir calado é o pior dos mundos: a aula fica sem .md e ninguém sabe.
+        if (pp && pp.__N_REDIRECT) {
+            console.warn(`[Sifão] aula ${md}: redirects demais (${salto}); texto ficará vazio`);
+        }
         const out = extrairTextoParaMd(pp, md);
         // Mesma resposta, nenhum request a mais: o vídeo do Skool vem daqui.
         out.urlVideo = extrairVideoSkool(pp, videoId);
@@ -614,12 +694,8 @@ async function enfileirarCurso(aulas, ctx, aoProgredir) {
             await fetch(SERVIDOR, {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify({
+                body: corpoDoPedido(aula, {
                     url: aula.url,
-                    folder: aula.folder,
-                    filename: aula.filename,
-                    desc: aula.desc,
-                    resources: aula.resources,
                     anexos: aula.anexos || [],
                 }),
             });
@@ -654,15 +730,20 @@ function ehPaginaComunidade() {
     return !!group && !course && /\/classroom\/?$/.test(location.pathname);
 }
 
-async function buscarPagePropsDeCurso(slug, buildId, group) {
+async function buscarPagePropsDeCurso(slug, buildId, group, mdInicial) {
     // MEDIDO: pedir o curso sem `md` NÃO devolve o curso. O Skool responde 200 com um
     // corpo de redirect — {"pageProps":{"__N_REDIRECT":"...?md=<primeira aula>"}} —
     // porque a rota do curso sempre aponta para uma aula. Só relendo com esse `md` é
     // que vem pageProps.course. (Dentro de um curso isso nunca aparecia: a URL já
     // trazia o md.) Seguimos o salto no máximo 2× para não girar em falso.
+    //
+    // `mdInicial` serve ao caminho do curso ABERTO, que já sabe o md pela URL: além
+    // de evitar o salto, ele MUDA a resposta — `pinnedPosts` pertence à aula aberta,
+    // não ao curso. Sem passar o md, o pill perderia o vídeo que mora em post fixado.
     if (!slug || !buildId || !group) return null;
     const base = `${location.origin}/_next/data/${buildId}/${group}/classroom/${slug}.json`;
     let q = `group=${encodeURIComponent(group)}&course=${encodeURIComponent(slug)}`;
+    if (mdInicial) q += `&md=${encodeURIComponent(mdInicial)}`;
 
     for (let salto = 0; salto < 3; salto++) {
         try {
@@ -676,8 +757,27 @@ async function buscarPagePropsDeCurso(slug, buildId, group) {
             if (pp && pp.__N_REDIRECT) {
                 const md = new URL(pp.__N_REDIRECT, location.origin).searchParams.get('md');
                 if (!md) { console.warn(`[Sifão] curso ${slug}: redirect sem md`); return null; }
+
+                // O `md` PEDIDO manda mais que o do redirect, quando houve um.
+                //
+                // O redirect aponta para a aula PADRÃO do curso, e `pinnedPosts`
+                // pertence à aula ABERTA — trocar o md aqui faria o pill ler os posts
+                // fixados de outra aula e enfileirar o vídeo dela com o nome desta.
+                // É o "vídeo errado colado na aula" que as checagens de
+                // `id === videoId` existem para impedir.
+                //
+                // Só usamos o md do redirect quando não havia um pedido (o caminho da
+                // comunidade, que busca o curso sem saber a aula).
+                const mdEfetivo = mdInicial || md;
                 q = `group=${encodeURIComponent(group)}&course=${encodeURIComponent(slug)}` +
-                    `&md=${encodeURIComponent(md)}`;
+                    `&md=${encodeURIComponent(mdEfetivo)}`;
+
+                // Se o md pedido já estava na query e mesmo assim veio redirect,
+                // repetir a mesma query giraria em falso até esgotar os saltos.
+                if (mdInicial && salto > 0) {
+                    console.warn(`[Sifão] curso ${slug}: redirect insistente com md=${mdInicial}`);
+                    return null;
+                }
                 continue;
             }
             if (pp && pp.course) return pp;
@@ -845,10 +945,11 @@ async function dadosDaAulaAtual() {
     if (!unit) return null;
     const cg = pp.currentGroup || {};
     const comunidade = (cg.metadata && cg.metadata.displayName) || cg.name || 'Skool';
-    const meta = metaDe(unit) || {};
-    const { curso, modulos } = caminhoDaAula(unit, porId);
-    const pasta = [comunidade, curso, ...modulos].filter(Boolean).map(limparTexto).join('/');
-    return { folder: pasta, filename: limparTexto(meta.title || 'Aula sem titulo') };
+
+    // MESMA função que os outros dois botões usam. Vem com `desc`/`resources`
+    // junto, e é isso que faz o pill gerar o .md — antes ele postava só
+    // {url, folder, filename} e a aula baixada por ele nunca tinha texto.
+    return pacoteDaAula(unit, porId, comunidade);
 }
 
 function criarBotaoDownload(iframe) {
@@ -877,7 +978,7 @@ function criarBotaoDownload(iframe) {
         fetch(SERVIDOR, {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ url: urlEmbed, folder: dados.folder, filename: dados.filename }),
+            body: corpoDoPedido(dados, { url: urlEmbed }),
         })
         .then(r => r.json())
         .then(() => { btn._lab.textContent = 'Na fila'; })
@@ -1012,10 +1113,8 @@ function criarBotaoVimeo() {
             const resp = await fetch(SERVIDOR, {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify({
+                body: corpoDoPedido(dados, {
                     url: `https://player.vimeo.com/video/${id}`,
-                    folder: dados.folder,
-                    filename: dados.filename,
                     referer: location.href,   // libera o Vimeo restrito por domínio
                 }),
             });
@@ -1081,10 +1180,10 @@ function criarBotaoLoomNativo() {
             const resp = await fetch(SERVIDOR, {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify({
+                // Loom fora do Skool: não há aula, então não há `desc` nem módulo.
+                // Passa pela mesma função só para o corpo ter sempre o mesmo formato.
+                body: corpoDoPedido({ folder: 'Loom', filename: titulo }, {
                     url: `https://www.loom.com/embed/${id}`,   // mesmo caminho do embed no Skool
-                    folder: 'Loom',
-                    filename: titulo,
                 }),
             });
             await resp.json();
@@ -1208,12 +1307,13 @@ async function criarBotaoVideoSkool() {
             const r = await fetch(SERVIDOR, {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify({
+                // O texto resolvido no clique (`t`) é mais fresco que o do pacote,
+                // mas só sobrepõe quando veio preenchido — senão apagaria o que o
+                // `pacoteDaAula` já trouxe.
+                body: corpoDoPedido(dados, {
                     url: t.urlVideo,
-                    folder: dados.folder,
-                    filename: dados.filename,
-                    desc: t.desc || '',
-                    resources: t.resources || '',
+                    ...(t.desc ? { desc: t.desc } : {}),
+                    ...(t.resources ? { resources: t.resources } : {}),
                 }),
             });
             await r.json();

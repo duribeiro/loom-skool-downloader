@@ -1,12 +1,19 @@
-"""Reorganiza a `output/` para o layout de pasta por aula (Sifão 4.0).
+"""Reorganiza a `output/` para o layout de pasta por aula (Sifão 4.1).
 
-Regra (a mesma do servidor): aula que gerou 2+ arquivos ganha pasta com o nome dela;
-aula com um arquivo só continua solta.
+Regra (a mesma do servidor): TODA aula ganha pasta com o nome dela — com 1 arquivo
+ou com 5. O lugar é função da IDENTIDADE da aula, não do que ela gerou.
 
     Modulo/Aula X.mp4                 ->  Modulo/Aula X/Aula X.mp4
     Modulo/Aula X.md                  ->  Modulo/Aula X/Aula X.md
     Modulo/Aula X - template.json     ->  Modulo/Aula X/template.json
-    Modulo/Aula Y.mp4   (sozinha)     ->  fica onde está
+    Modulo/Aula Y.mp4   (sozinha)     ->  Modulo/Aula Y/Aula Y.mp4
+
+Até 12/08/2026 a regra era "2+ arquivos ganham pasta; um arquivo só fica solto", e
+este cabeçalho a descrevia — inclusive prometendo que a aula sozinha "fica onde está".
+Quando o servidor mudou, o filtro `len(fs) >= 2` daqui ficou para trás e a simulação
+passou a reportar ZERO movimentos com 277 arquivos soltos em disco. Corrigido, e
+registrado aqui porque este script MOVE ARQUIVO: quem lê o cabeçalho e roda
+`--executar` precisa que ele diga a verdade.
 
 SIMULA por padrão. Só move de verdade com `--executar`.
 
@@ -74,7 +81,13 @@ def _agrupar(pasta):
         if candidatos:
             grupos[max(candidatos, key=len)].append(nome)
 
-    return {aula: sorted(fs) for aula, fs in grupos.items() if len(fs) >= 2}
+    # PASTA SEMPRE: aula com UM arquivo também ganha pasta.
+    #
+    # Havia aqui um `if len(fs) >= 2`, cópia da regra que o servidor usava. Quando o
+    # servidor passou a criar pasta para toda aula (12/08/2026), este filtro deixou o
+    # script cego: a simulação reportou 0 movimentos com 277 arquivos soltos em disco.
+    # Regra duplicada em dois lugares só fica sincronizada até a primeira mudança.
+    return {aula: sorted(fs) for aula, fs in grupos.items()}
 
 
 def _destino_do_arquivo(aula, nome):

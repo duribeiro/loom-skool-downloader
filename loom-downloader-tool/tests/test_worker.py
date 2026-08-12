@@ -33,7 +33,9 @@ def test_aula_so_texto_grava_md_e_da_sucesso(output_isolado):
     item = _item(url="")  # sem vídeo
     routes.worker_download("", item["folder"], item["nome"], item, DESC, RESOURCES)
 
-    md = output_isolado / "Com" / "Curso" / "Modulo" / "Aula 1.md"
+    # PASTA SEMPRE: a aula ganha pasta com o nome dela mesmo com um arquivo só.
+    # O caminho é função da IDENTIDADE da aula, nunca do que o pedido trouxe.
+    md = output_isolado / "Com" / "Curso" / "Modulo" / "Aula 1" / "Aula 1.md"
     assert md.exists()
     conteudo = md.read_text(encoding="utf-8")
     assert "corpo da aula" in conteudo
@@ -47,7 +49,7 @@ def test_aula_vazia_gera_md_placeholder(output_isolado):
     item = _item(url="")
     routes.worker_download("", item["folder"], item["nome"], item, None, None)
 
-    md = output_isolado / "Com" / "Curso" / "Modulo" / "Aula 1.md"
+    md = output_isolado / "Com" / "Curso" / "Modulo" / "Aula 1" / "Aula 1.md"
     assert md.exists()
     conteudo = md.read_text(encoding="utf-8")
     assert "# Aula 1" in conteudo
@@ -67,10 +69,8 @@ def test_aula_video_mais_texto(output_isolado, monkeypatch):
     item = _item(url="https://www.loom.com/embed/abc")
     routes.worker_download(item["url"], item["folder"], item["nome"], item, DESC, RESOURCES)
 
-    # Vídeo + texto = 2 artefatos, então a aula ganha PASTA PRÓPRIA
-    # (`_quantos_artefatos >= 2`, routes.py:161). Por isso o .md fica em
-    # `Modulo/Aula 1/Aula 1.md`, e não solto no módulo como nas aulas de um
-    # arquivo só. A decisão é tomada antes do download, pelo que se espera gerar.
+    # PASTA SEMPRE: o caminho sai da IDENTIDADE da aula, não do que ela gera.
+    # Vale igual para a aula de 5 arquivos e para a de 1 só.
     md = output_isolado / "Com" / "Curso" / "Modulo" / "Aula 1" / "Aula 1.md"
     assert md.exists()
     assert item["status"] == "sucesso"
@@ -186,8 +186,13 @@ def test_worker_que_estoura_vira_erro_e_nao_fica_baixando(monkeypatch, capsys):
 
     assert item["status"] == "erro", "o item ficaria preso em 'baixando' para sempre"
     saida = capsys.readouterr().out
-    assert "WORKER MORREU" in saida and "boom no meio do download" in saida, \
+    assert "boom no meio do download" in saida, \
         "a falha precisa ser VISÍVEL no terminal, não só mudar o status"
+
+    # O terminal não basta: o dashboard roda em Live(screen=True) e repinta 4x/s,
+    # então o print some em ~250ms. O motivo tem que ficar GUARDADO no item.
+    assert "boom no meio do download" in item.get("motivo", ""), \
+        "sem o motivo no item, o painel diz 'erro' e ninguém sabe de quê"
 
 
 def test_barra_nao_passa_de_100_entre_faixas(output_isolado, monkeypatch):
@@ -241,3 +246,88 @@ def test_video_falha_status_erro(output_isolado, monkeypatch):
     # depois não desfaz a pasta — e não deve mesmo: o texto já está lá dentro.
     assert (output_isolado / "Com" / "Curso" / "Modulo" / "Aula 1" / "Aula 1.md").exists()
     assert item["status"] == "erro"
+
+
+def test_pasta_existente_da_aula_manda_mais_que_a_previsao(output_isolado, monkeypatch, tmp_path):
+    """Pedido sem `desc` cai na MESMA pasta de um pedido com `desc`.
+
+    REGRESSÃO RELATADA (12/08/2026): um curso inteiro foi rebaixado só com os
+    vídeos, soltos ao lado das pastas antigas. A regra de então previa os artefatos
+    do pedido — sem `desc` dava 1, nenhuma pasta era criada, o servidor procurava o
+    .mp4 solto no módulo, não achava, e baixava tudo de novo.
+
+    O caminho passou a sair da IDENTIDADE da aula, então o `desc` não influencia
+    mais onde nada é gravado. Este teste guarda essa propriedade.
+    """
+    monkeypatch.setattr(routes, "PASTA_OUTPUT", str(tmp_path))
+    monkeypatch.setattr(routes, "extrair_metadados", lambda url: ("t", "m3u8"))
+    monkeypatch.setattr(routes, "converter_final", lambda *a, **k: True)
+    monkeypatch.setattr(routes, "limpar_pasta", lambda *a, **k: None)
+
+    destinos = []
+    monkeypatch.setattr(routes, "processar_download",
+                        lambda url, temp, nome, pasta_rel, cb=None: destinos.append(pasta_rel) or True)
+
+    # Execução anterior deixou a pasta da aula pronta.
+    (tmp_path / "Com" / "Curso" / "Modulo" / "Aula 1").mkdir(parents=True)
+
+    # Pedido novo SEM desc: a previsão sozinha daria 1 artefato e nenhuma pasta.
+    item = _item(url="https://www.loom.com/embed/abc")
+    routes.worker_download(item["url"], item["folder"], item["nome"], item, None, None)
+
+    assert destinos, "processar_download não chegou a ser chamado"
+    assert destinos[0].replace("\\", "/").endswith("Modulo/Aula 1"), (
+        f"gravaria fora da pasta existente: {destinos[0]!r}")
+
+
+def test_caminho_dos_anexos_e_exercitado(output_isolado, monkeypatch):
+    """O bloco de anexos precisa ser EXECUTADO por algum teste.
+
+    BURACO DE COBERTURA MEDIDO em 12/08/2026: ao remover a variável
+    `aula_tem_pasta`, ficou para trás um `prefixar=not aula_tem_pasta` — um
+    `NameError` puro. A suíte inteira passou (113 verdes), porque o bloco só roda
+    `if anexos:` e nenhum teste mandava anexo. Um teste que nunca entra no ramo não
+    protege o ramo.
+    """
+    chamadas = []
+
+    def falso_baixar_anexos(anexos, pasta):
+        chamadas.append((anexos, pasta))
+        return len(anexos), 0
+
+    monkeypatch.setattr(routes, "baixar_anexos", falso_baixar_anexos)
+
+    item = _item(url="")   # aula só de texto + anexo
+    anexos = [{"url": "https://x/f.pdf", "nome": "f.pdf"}]
+    routes.worker_download("", item["folder"], item["nome"], item, DESC, None,
+                           None, anexos)
+
+    assert chamadas, "o bloco de anexos não foi executado — o ramo segue sem guarda"
+    _, pasta_usada = chamadas[0]
+    assert pasta_usada.endswith("Aula 1"), \
+        "anexo tem que ir para a pasta da aula, não para o módulo"
+    assert item["status"] == "sucesso"
+
+
+def test_nao_adota_video_de_aula_vizinha_com_nome_mais_longo(tmp_path, monkeypatch):
+    """'Aula 1' não pode engolir o vídeo de 'Aula 1 - Extra'.
+
+    PEGO NA REVISÃO (12/08/2026): a regra do prefixo valia para qualquer arquivo,
+    então 'Aula 1' adotava 'Aula 1 - Extra.mp4'. A vizinha então procurava o vídeo
+    na pasta dela, não achava, e REBAIXAVA — perdendo justamente a propriedade que
+    `_adotar_arquivos_soltos` existe para proteger.
+    """
+    modulo = tmp_path / "Modulo"
+    modulo.mkdir()
+    (modulo / "Aula 1.mp4").write_bytes(b"meu")
+    (modulo / "Aula 1 - Extra.mp4").write_bytes(b"da vizinha")
+    (modulo / "Aula 1 - anexo.pdf").write_bytes(b"anexo meu")
+
+    pasta_aula = modulo / "Aula 1"
+    routes._adotar_arquivos_soltos(str(modulo), str(pasta_aula), "Aula 1")
+
+    assert (pasta_aula / "Aula 1.mp4").exists(), "o próprio vídeo tem que ser adotado"
+    assert (modulo / "Aula 1 - Extra.mp4").exists(), \
+        "o vídeo da aula vizinha foi roubado — ela vai rebaixar tudo"
+    assert (pasta_aula / "Aula 1 - anexo.pdf").exists(), \
+        "anexo com o prefixo antigo continua sendo adotado"

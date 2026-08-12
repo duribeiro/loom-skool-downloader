@@ -12,21 +12,88 @@ HEADERS = {
     "Origin": "https://www.loom.com"
 }
 
+# Teto de caracteres para o nome de UM componente do caminho (pasta ou arquivo).
+#
+# Por que existe: com pasta por aula, o nome da aula entra DUAS vezes no caminho
+# (`.../Aula X/Aula X.mp4`), então um título longo custa o dobro. O limite do
+# Windows é 260 chars no caminho inteiro.
+#
+# MEDIDO na output/ em 12/08/2026: 885 arquivos, caminho mais longo 256 chars, e
+# só 3 passariam de 260 ao ganhar pasta própria — o pior com 286.
+#
+# Por que 80 e não outro número: dos 1260 componentes de caminho em uso, o maior
+# tem 81 chars — e é um dos 3 que estouram. Ou seja, cortar em 80 encurta esse um
+# em uma letra (rebaixa ele uma vez, de propósito, porque o caminho dele é
+# inválido) e não encosta em nenhum dos outros 1259. Um limite mais folgado (100)
+# não protegeria os 3; um mais apertado renomearia arquivo bom em massa.
+LIMITE_NOME = 80
+
+# Maior extensão que ainda parece extensão (".jpeg", ".webm", ".stackdump"). Acima
+# disso, o ponto era do NOME, não de uma extensão.
+_MAX_EXTENSAO = 12
+
+
 def limpar_nome_arquivo(nome):
     """
-    Remove caracteres proibidos em nomes de arquivos do Windows/Linux.
+    Remove caracteres proibidos em nomes de arquivos do Windows/Linux e corta o
+    que passar de `LIMITE_NOME`.
     Ex: "Aula: 01?" vira "Aula 01"
     """
     if not nome: return "sem_titulo"
-    
+
     # Decodifica entidades HTML (ex: &amp; vira &)
     nome = html.unescape(nome)
-    
+
     # Remove caracteres proibidos (< > : " / \ | ? *)
     nome = re.sub(r'[<>:"/\\|?*]', '', nome)
-    
+
     # Remove espaços duplos e espaços nas pontas
-    return " ".join(nome.split())
+    nome = " ".join(nome.split())
+
+    # Corta no limite, sem deixar espaço solto na ponta. O corte é DETERMINÍSTICO:
+    # o mesmo título sempre vira o mesmo nome, então "já baixei?" continua achando
+    # o arquivo de uma execução anterior.
+    #
+    # NÃO tenta preservar extensão aqui de propósito: esta função nomeia PASTAS e
+    # bases de arquivo (aula, módulo, comunidade), onde um ponto no meio do título
+    # ("Aula 1.5 - Intro") não é extensão. Para nome que TEM extensão de verdade,
+    # use `cortar_preservando_extensao`.
+    if len(nome) > LIMITE_NOME:
+        nome = nome[:LIMITE_NOME].rstrip()
+
+    return nome or "sem_titulo"
+
+
+def cortar_preservando_extensao(nome_arquivo, limite=LIMITE_NOME):
+    """Limpa e encurta um nome de arquivo SEM perder a extensão.
+
+    REGRESSÃO MEDIDA em 12/08/2026, pega na revisão: ao remover o antigo
+    `_nome_do_anexo` (que usava `splitext`) e, no mesmo patch, pôr um corte cego de
+    `LIMITE_NOME` em `limpar_nome_arquivo`, um anexo de 90 chars perdia o `.pdf`:
+
+        'Checklist ... com N8N e Evolution API.pdf'  ->  'Checklist ... e Evoluti'
+
+    Sem extensão o Windows não abre o arquivo e nada a jusante consegue distinguir
+    o anexo de lixo. As duas mudanças estavam certas sozinhas; juntas, destruíam
+    o produto de cursos como a Biblioteca de Templates.
+    """
+    bruto = html.unescape(nome_arquivo or "")
+    base, ext = os.path.splitext(bruto)
+    ext = re.sub(r'[<>:"/\\|?*]', '', ext)
+
+    # `splitext` corta no ÚLTIMO ponto, e ponto no meio do nome é comum:
+    # 'Aula 1.5 - Introducao' virava base='Aula 1' + ext='.5 - Introducao', e o
+    # corte da "extensão" mutilava o nome. Extensão de verdade é curta e não tem
+    # espaço — o que não for assim é parte do nome.
+    if len(ext) > _MAX_EXTENSAO or " " in ext:
+        base, ext = bruto, ""
+
+    base = limpar_nome_arquivo(base)
+    if base == "sem_titulo" and not ext:
+        return "anexo"
+
+    disponivel = max(1, limite - len(ext))
+    return (base[:disponivel].rstrip() or "anexo") + ext
 
 def limpar_pasta(caminho):
     """

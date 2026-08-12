@@ -96,10 +96,14 @@ Vale seguir esse trace antes de mexer em qualquer coisa:
    - resolve o nome quando o pedido veio sem ele, roteando por origem (`routes.py:124-136`);
    - YouTube **de link colado** ganha subpasta de canal (`routes.py:153`) — e **só**
      nesse caso; ver o comentário longo ali, é uma regressão já vivida;
-   - decide se a aula vira **pasta própria**: `_quantos_artefatos(...) >= 2`
-     (`routes.py:161`). Com 2+ arquivos (mp4 + md + anexos) a aula ganha pasta com o
-     nome dela; com um só, o arquivo fica solto no módulo. `_adotar_arquivos_soltos`
-     (`routes.py:66`) recolhe o que já havia sido baixado no layout antigo, para não rebaixar;
+   - dá à aula uma **pasta própria, sempre** — com 1 arquivo ou com 5. O lugar é função
+     da **identidade** da aula; o conteúdo só decide QUAIS arquivos existem, nunca ONDE
+     ficam. Até 12/08/2026 a pasta só nascia a partir de 2 artefatos, o que amarrava o
+     caminho ao conteúdo do pedido: com `desc` a aula ganhava pasta, sem `desc` o arquivo
+     ficava solto. Medido no uso real: o "já baixei?" procurava o `.mp4` num caminho que a
+     própria regra tinha mudado, e um curso inteiro foi rebaixado com os vídeos soltos ao
+     lado das pastas antigas. `_adotar_arquivos_soltos` (`routes.py:66`) recolhe o que já
+     havia sido baixado no layout antigo, para não rebaixar;
    - grava o `.md` (`routes.py:195`) e baixa os **anexos** (`routes.py:208`) **antes** do
      vídeo — em curso onde o anexo é o produto, ele não pode depender do vídeo dar certo;
    - roteia o vídeo (`routes.py:231-265`).
@@ -158,9 +162,17 @@ downloads simultâneos). O vídeo do Skool ainda passa por `_diagnosticar`
 - `baixar_com_ytdlp` (`services/ytdlp.py:108`) — origem nova que o yt-dlp suporte não
   precisa de motor novo, só de um wrapper fino (`youtube.py`/`vimeo.py`/`skool.py` são
   isso, ~30 linhas cada).
-- `montar_markdown` / `salvar_aula_md` (`services/texto.py:141` e `:168`) — inclusive
-  para *prever* se uma aula vai gerar `.md`: `_quantos_artefatos` (`routes.py:54`)
-  chama o mesmo `montar_markdown` que grava depois, em vez de replicar a regra.
+- `montar_markdown` / `salvar_aula_md` (`services/texto.py:141` e `:168`) — para
+  qualquer `.md` de aula. A regra de "tem texto?" mora lá; não replique.
+- `registrar_erro` (`services/registro.py`) — **todo** caminho novo que marque uma aula
+  como erro passa por `_marcar_erro` (`routes.py`), que guarda o motivo no item **e** em
+  `logs/erros.log`. Um `print` solto some no repaint do dashboard em ~250ms; foi assim
+  que um erro real ficou irrecuperável em 12/08/2026.
+- `corpoDoPedido` (`extension/content.js`) — os **cinco** POSTs da extensão montam o
+  corpo aqui. Campo novo entra num lugar e vale para os cinco.
+- `pacoteDaAula` (`extension/content.js`) — pasta, nome e texto de uma aula. Os três
+  botões (comunidade, curso e pill) passam por ela; é o que garante que a mesma aula
+  caia sempre no mesmo caminho.
 
 ### Estado compartilhado
 

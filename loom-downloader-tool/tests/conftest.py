@@ -15,6 +15,20 @@ PASTA_FIXTURES = os.path.join(os.path.dirname(os.path.abspath(__file__)), "fixtu
 sys.path.insert(0, os.path.join(RAIZ, "server"))
 
 
+@pytest.fixture(autouse=True)
+def _log_de_erros_isolado(tmp_path, monkeypatch):
+    """Nenhum teste escreve no `logs/erros.log` do projeto.
+
+    MEDIDO: sem isto, os testes do worker chamavam `_marcar_erro` de verdade e
+    deixavam 4 linhas de fixture ("Aula 1", "boom no meio do download") no log real
+    — que é justamente onde alguém vai procurar um erro DE VERDADE depois.
+    `autouse` porque a poluição vem de testes que nem falam de log.
+    """
+    from services import registro
+    monkeypatch.setattr(registro, "PASTA_LOGS", str(tmp_path / "logs"))
+    monkeypatch.setattr(registro, "ARQUIVO_ERROS", str(tmp_path / "logs" / "erros.log"))
+
+
 def ler_fixture(nome):
     """Lê uma fixture congelada como texto."""
     with open(os.path.join(PASTA_FIXTURES, nome), encoding="utf-8") as arquivo:

@@ -1,6 +1,7 @@
 import os
 import time
 import threading
+from rich.console import Group
 from rich.live import Live
 from rich.layout import Layout
 from rich.panel import Panel
@@ -295,28 +296,69 @@ def _gerar_tabela_ativos(itens, max_fila=5):
     return table
 
 
-def _gerar_painel_historico(itens):
-    """
-    Cria o painel inferior com o histórico dos últimos downloads concluídos.
-    """
-    concluidos = [d for d in itens if d.get('status') == 'sucesso']
+# Corte do NOME no histórico, para o motivo ainda aparecer numa linha curta.
+_MAX_NOME_HISTORICO = 28
 
-    if not concluidos:
+
+def _cortar(texto, limite):
+    texto = str(texto or '?')
+    return texto if len(texto) <= limite else texto[:limite - 1] + '…'
+
+
+def _linha_de_uma_linha_so(markup):
+    """Texto que NUNCA quebra em duas linhas, seja qual for a largura do terminal.
+
+    MEDIDO: com corte de largura fixa (nome 28 + motivo 44), num terminal de 80
+    colunas o painel rendeu 8 linhas contra um orçamento de 5 — o Live então empilha
+    quadros e a tela vira cascata de bordas. Corte fixo não resolve porque a largura
+    é do terminal, não do texto: quem tem que decidir onde cortar é o Rich, no
+    momento do render. `no_wrap` + `overflow='ellipsis'` faz exatamente isso.
+    """
+    # `no_wrap`/`overflow` como atributos e não como kwargs de `from_markup`: a
+    # versão do Rich aqui não aceita esses kwargs no construtor da fábrica.
+    texto = Text.from_markup(markup)
+    texto.no_wrap = True
+    texto.overflow = "ellipsis"
+    return texto
+
+
+def _gerar_painel_historico(itens):
+    """Histórico recente, com ERRO NA FRENTE — e dizendo de quê.
+
+    Antes mostrava só os últimos sucessos. Mas sucesso o resumo já conta (é o próprio
+    comentário de `_montar_layout`: "o histórico só repete o que o resumo já diz"),
+    enquanto o MOTIVO do erro não aparecia em lugar nenhum da tela.
+
+    RELATADO no uso real (12/08/2026): "deu um erro e eu nem sei o que foi que deu
+    erro, se foi um vídeo, se foi o markdown". O motivo existia — em `logs/erros.log`
+    — mas quem está olhando o painel não vai abrir arquivo.
+
+    O número de linhas é o mesmo de antes (3), então o orçamento de altura não muda.
+    """
+    erros = [d for d in itens if d.get('status') == 'erro']
+    sucessos = [d for d in itens if d.get('status') == 'sucesso']
+
+    if not erros and not sucessos:
         return Panel(
             "[dim]Nenhum download finalizado nesta sessão.[/]",
             title="📜 Histórico Recente",
             border_style="blue"
         )
 
-    # Mostra apenas os últimos 3 para não encher a tela
-    texto_historico = ""
-    for item in concluidos[-3:]:
-        texto_historico += f"✅ {item.get('nome', '?')}\n"
+    linhas = []
+    # Erro primeiro: é a informação que some se não couber.
+    for item in erros[-3:]:
+        nome = _cortar(item.get('nome'), _MAX_NOME_HISTORICO)
+        motivo = item.get('motivo') or 'motivo não registrado'
+        linhas.append(f"[red]❌ {nome}[/] [dim]— {motivo}[/]")
+
+    for item in sucessos[-(3 - len(linhas)):] if len(linhas) < 3 else []:
+        linhas.append(f"✅ {_cortar(item.get('nome'), _MAX_NOME_HISTORICO)}")
 
     return Panel(
-        texto_historico.strip(),
+        Group(*[_linha_de_uma_linha_so(l) for l in linhas[:3]]),
         title="📜 Histórico Recente",
-        border_style="green"
+        border_style="red" if erros else "green"
     )
 
 NOME_PROGRAMA = "Sifão"

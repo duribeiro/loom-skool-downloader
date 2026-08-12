@@ -1,5 +1,6 @@
 import os
 import traceback
+import uuid
 from flask import Blueprint, request, jsonify
 from concurrent.futures import ThreadPoolExecutor
 
@@ -14,7 +15,6 @@ from services import (
     processar_download,
     converter_final,
     salvar_aula_md,
-    montar_markdown,
     PASTA_OUTPUT,
     baixar_youtube,
     eh_url_youtube,
@@ -26,6 +26,7 @@ from services import (
     baixar_skool,
     eh_url_skool_video,
     baixar_anexos,
+    registrar_erro,
     PASTA_TEMP_RAIZ
 )
 
@@ -54,20 +55,9 @@ FAIXA_CONVERSAO = (85, 99)
 
 # --- 0. ORGANIZAÇÃO EM PASTA POR AULA ---
 # Uma aula pode render vários arquivos (mp4 + md + anexos). Soltos no módulo, eles
-# se misturam com os das aulas vizinhas. A partir de DOIS arquivos, a aula ganha
-# pasta própria; com um só, ele continua solto (pasta com um arquivo é ruído).
-
-def _quantos_artefatos(url, desc, resources, anexos, nome):
-    """Prevê quantos arquivos esta aula vai gerar, ANTES de gravar qualquer um.
-
-    O .md é previsto chamando o MESMO `montar_markdown` que grava depois — prever
-    por regra própria (ex.: "tem desc?") sairia do ar assim que a regra de lá
-    mudasse, e a pasta passaria a ser criada na hora errada.
-    """
-    tem_video = 1 if url else 0
-    tem_md = 1 if montar_markdown(nome, desc, resources, permitir_vazio=not url) else 0
-    return tem_video + tem_md + len(anexos or [])
-
+# se misturam com os das aulas vizinhas. Por isso TODA aula ganha pasta própria —
+# ver o bloco longo em `worker_download`, que explica por que a regra antiga
+# ("só a partir de 2 arquivos") rebaixava curso inteiro.
 
 def _adotar_arquivos_soltos(pasta_pai_abs, pasta_aula_abs, nome_limpo):
     """Move para a pasta da aula o que já havia sido baixado solto.
@@ -85,9 +75,24 @@ def _adotar_arquivos_soltos(pasta_pai_abs, pasta_aula_abs, nome_limpo):
         if not os.path.isfile(origem):
             continue
 
-        base, _ = os.path.splitext(nome_arquivo)
+        base, ext = os.path.splitext(nome_arquivo)
+
         # O .mp4/.md da aula, e os anexos que foram gravados com o prefixo dela.
-        pertence = base == nome_limpo or nome_arquivo.startswith(f"{nome_limpo} - ")
+        #
+        # O PREFIXO SÓ VALE PARA ANEXO. Antes a regra do prefixo valia para qualquer
+        # arquivo, e aí a aula "Aula 1" adotava o `Aula 1 - Extra.mp4` da aula VIZINHA
+        # chamada "Aula 1 - Extra": a vizinha então procurava o vídeo na pasta dela,
+        # não achava, e rebaixava — perdendo exatamente a propriedade que esta função
+        # existe para proteger. `migrar_layout.py:22-23` já conhece essa ambiguidade e
+        # a resolve com "prefixo mais longo vence"; aqui o worker não enxerga as aulas
+        # irmãs, então o corte é por tipo: vídeo e texto exigem nome EXATO.
+        #
+        # Isso é seguro porque o layout antigo nomeava vídeo/texto sempre como
+        # `<Aula>.mp4` / `<Aula>.md`; só o anexo levava o prefixo `<Aula> - `.
+        if ext.lower() in ('.mp4', '.md'):
+            pertence = base == nome_limpo
+        else:
+            pertence = base == nome_limpo or nome_arquivo.startswith(f"{nome_limpo} - ")
         if not pertence:
             continue
 
@@ -104,6 +109,20 @@ def _adotar_arquivos_soltos(pasta_pai_abs, pasta_aula_abs, nome_limpo):
     if movidos:
         print(f"📁 {movidos} arquivo(s) já baixado(s) movido(s) para a pasta de '{nome_limpo}'")
     return movidos
+
+
+def _marcar_erro(item_dashboard, nome, pasta, motivo):
+    """Marca o item como erro guardando O MOTIVO — no item e em disco.
+
+    Antes só o status virava 'erro'; o motivo saía por `print` e o dashboard
+    (`Live(screen=True)`) repintava por cima em ~250ms. MEDIDO em 12/08/2026: o
+    painel dizia "1 erro" e não havia como saber se falhou o vídeo, o texto ou o
+    anexo — a informação existia e era destruída no mesmo segundo.
+    """
+    item_dashboard['status'] = 'erro'
+    item_dashboard['motivo'] = motivo
+    registrar_erro(nome, pasta, motivo)
+    print(f"\n❌ ERRO em '{nome}': {motivo}")
 
 
 def _worker_blindado(url, pasta_destino, nome_arquivo_sugerido, item_dashboard,
@@ -124,9 +143,14 @@ def _worker_blindado(url, pasta_destino, nome_arquivo_sugerido, item_dashboard,
         worker_download(url, pasta_destino, nome_arquivo_sugerido, item_dashboard,
                         desc, resources, referer, anexos)
     except BaseException as erro:
-        item_dashboard['status'] = 'erro'
         nome = item_dashboard.get('nome') or nome_arquivo_sugerido or '?'
-        print(f"\n❌ WORKER MORREU em '{nome}': {type(erro).__name__}: {erro}")
+        # A pasta sai do ITEM, não do parâmetro: `worker_download` rebinda
+        # `pasta_destino` no meio do caminho (subpasta de canal do YouTube, pasta da
+        # aula) e mantém o item em dia. Usar o parâmetro registraria o MÓDULO num log
+        # cuja única função é dizer onde a falha aconteceu.
+        pasta = item_dashboard.get('folder') or pasta_destino
+        _marcar_erro(item_dashboard, nome, pasta,
+                     f"worker morreu: {type(erro).__name__}: {erro}")
         traceback.print_exc()
 
 
@@ -186,23 +210,46 @@ def worker_download(url, pasta_destino, nome_arquivo_sugerido, item_dashboard,
             pasta_destino = os.path.join(pasta_destino, limpar_nome_arquivo(canal))
             item_dashboard['folder'] = pasta_destino
 
-    # A partir de dois arquivos, a aula ganha pasta própria (mp4 + md + anexos ficam
-    # juntos em vez de espalhados pelo módulo). Com um só, segue solto.
-    aula_tem_pasta = _quantos_artefatos(url, desc, resources, anexos, nome_limpo) >= 2
-    if aula_tem_pasta:
-        pasta_pai = pasta_destino
-        pasta_destino = os.path.join(pasta_destino, nome_limpo)
-        item_dashboard['folder'] = pasta_destino
+    # TODA aula ganha pasta própria — com 1 arquivo ou com 5.
+    #
+    # O LUGAR É FUNÇÃO DA IDENTIDADE DA AULA. O conteúdo só decide QUAIS arquivos
+    # existem, nunca ONDE eles ficam.
+    #
+    # Antes, a pasta nascia só a partir de 2 artefatos (`_quantos_artefatos >= 2`),
+    # e isso amarrava o CAMINHO ao CONTEÚDO do pedido: com `desc` vinham 2 artefatos
+    # e a aula ganhava pasta; sem `desc` vinha 1 e o arquivo ficava solto. Mesma aula,
+    # dois caminhos, decididos por um fetch HTTP ter dado certo ou não.
+    #
+    # MEDIDO no uso real (12/08/2026): o "pular o que já baixou" procurava o .mp4 num
+    # caminho que a própria regra tinha mudado — não achava, REBAIXAVA o curso inteiro
+    # e largava o vídeo solto AO LADO da pasta antiga, sem .md. Não foi descuido: era
+    # a regra funcionando como estava escrita.
+    #
+    # Com pasta sempre, o caminho é idempotente e a pergunta "já baixei?" tem um lugar
+    # só. Custo aceito: um clique a mais para chegar num vídeo de aula que só tem vídeo.
+    pasta_pai = pasta_destino
+    pasta_destino = os.path.join(pasta_destino, nome_limpo)
+    item_dashboard['folder'] = pasta_destino
 
-        # Recolhe o que já estava solto de execuções anteriores, para não rebaixar.
-        pasta_pai_limpa = pasta_pai[1:] if pasta_pai.startswith(os.sep) else pasta_pai
-        pasta_aula_limpa = pasta_destino[1:] if pasta_destino.startswith(os.sep) else pasta_destino
-        _adotar_arquivos_soltos(os.path.join(PASTA_OUTPUT, pasta_pai_limpa),
-                                os.path.join(PASTA_OUTPUT, pasta_aula_limpa),
-                                nome_limpo)
+    # Recolhe o que já estava solto de execuções anteriores, para não rebaixar.
+    pasta_pai_limpa = pasta_pai[1:] if pasta_pai.startswith(os.sep) else pasta_pai
+    pasta_aula_limpa = pasta_destino[1:] if pasta_destino.startswith(os.sep) else pasta_destino
+    _adotar_arquivos_soltos(os.path.join(PASTA_OUTPUT, pasta_pai_limpa),
+                            os.path.join(PASTA_OUTPUT, pasta_aula_limpa),
+                            nome_limpo)
 
-    # Define onde ficarão os arquivos temporários (.ts)
-    caminho_pasta_temp = os.path.join(PASTA_TEMP_RAIZ, nome_limpo)
+    # Define onde ficarão os arquivos temporários (.ts).
+    #
+    # O SUFIXO ÚNICO NÃO É ENFEITE. Antes a temp era só `hls-temp/<nome da aula>`, e
+    # nome de aula se repete: duas "Introdução" em módulos diferentes dividiam a MESMA
+    # pasta de trabalho. Com 4 workers simultâneos, a que terminasse primeiro chamava
+    # `limpar_pasta` e apagava os segmentos da outra no meio da conversão — perda de
+    # dado silenciosa, que o painel reportaria como erro genérico.
+    #
+    # O risco é anterior a esta mudança (a linha era idêntica em dc68c70), mas o teto
+    # de 80 chars aumenta a chance: dois títulos longos podem colapsar no mesmo nome.
+    # O uuid custa nada e fecha o caso todo.
+    caminho_pasta_temp = os.path.join(PASTA_TEMP_RAIZ, f"{nome_limpo}_{uuid.uuid4().hex[:8]}")
 
     # B. Função de Callback
     # O downloader chama isso a cada pedacinho baixado para atualizar a barra
@@ -266,8 +313,7 @@ def worker_download(url, pasta_destino, nome_arquivo_sugerido, item_dashboard,
     # falhar, o material principal já está salvo.
     try:
         if anexos:
-            baixados, falhas_anexo = baixar_anexos(anexos, pasta_destino, nome_limpo,
-                                                   prefixar=not aula_tem_pasta)
+            baixados, falhas_anexo = baixar_anexos(anexos, pasta_destino)
             if baixados:
                 item_dashboard['anexos'] = baixados
             if falhas_anexo:
@@ -278,6 +324,10 @@ def worker_download(url, pasta_destino, nome_arquivo_sugerido, item_dashboard,
 
     # D. Baixar o vídeo, se houver
     video_ok = False
+    # Motivo padrão: cada ramo que sabe MAIS que isto sobrescreve. Nascer preenchido
+    # evita que um caminho novo caia no relatório final sem motivo nenhum — que é
+    # exatamente o buraco que este bloco veio fechar.
+    motivo_falha = "o download do vídeo não terminou (motivo não identificado)"
     if not url:
         # Aula só de texto: sucesso se o .md foi gravado.
         item_dashboard['total'] = 1
@@ -286,7 +336,11 @@ def worker_download(url, pasta_destino, nome_arquivo_sugerido, item_dashboard,
         # Biblioteca de Templates) não é erro se o arquivo veio.
         sucesso_operacao = bool(item_dashboard.get('tem_texto')
                                 or item_dashboard.get('anexos'))
-        item_dashboard['status'] = 'sucesso' if sucesso_operacao else 'erro'
+        if sucesso_operacao:
+            item_dashboard['status'] = 'sucesso'
+        else:
+            _marcar_erro(item_dashboard, nome_limpo, pasta_destino,
+                         "aula sem vídeo não gerou nem .md nem anexo")
         return
 
     if eh_url_youtube(url):
@@ -294,11 +348,15 @@ def worker_download(url, pasta_destino, nome_arquivo_sugerido, item_dashboard,
         # Não passa pelo HLS nem pelo converter — grava direto o .mp4 final.
         video_ok = baixar_youtube(url, pasta_destino, nome_limpo, atualizar_progresso,
                                   ao_converter=marcar_convertendo, ao_fase=marcar_fase)
+        if not video_ok:
+            motivo_falha = "yt-dlp não baixou o vídeo do YouTube (ver stderr do yt-dlp)"
     elif eh_url_vimeo(url):
         # Vimeo (privado no Skool): mesmo motor do YouTube, mas com o Referer da
         # página — é o que libera o vídeo restrito por domínio.
         video_ok = baixar_vimeo(url, pasta_destino, nome_limpo, referer, atualizar_progresso,
                                 ao_converter=marcar_convertendo, ao_fase=marcar_fase)
+        if not video_ok:
+            motivo_falha = "yt-dlp não baixou o Vimeo (Referer recusado? vídeo privado?)"
     elif eh_url_skool_video(url):
         # Vídeo hospedado no próprio Skool (Mux). A extensão já resolveu o token e
         # mandou o .m3u8 pronto — aqui é só baixar. Não passa pelo motor HLS do Loom:
@@ -306,11 +364,20 @@ def worker_download(url, pasta_destino, nome_arquivo_sugerido, item_dashboard,
         # vídeo e áudio (ver services/skool.py).
         video_ok = baixar_skool(url, pasta_destino, nome_limpo, atualizar_progresso,
                                 ao_converter=marcar_convertendo, ao_fase=marcar_fase)
+        if not video_ok:
+            # O token do Skool dura ~24h e uma fila longa alcança a expiração;
+            # `_diagnosticar` (skool.py) já separa isso de erro genérico.
+            motivo_falha = "vídeo do Skool não baixou (token expirado? reenfileire o curso)"
     else:
         # Loom (e afins via embed): extrai o .m3u8 e baixa o HLS.
         _, url_m3u8 = extrair_metadados(url)
 
-        if url_m3u8:
+        if not url_m3u8:
+            # Distinguir as três falhas do caminho HLS importa: "não achei o .m3u8"
+            # é problema de extração (a página do Loom mudou), "download falhou" é
+            # rede, e "conversão falhou" é FFmpeg. Um "erro" genérico não separava.
+            motivo_falha = "não achei o .m3u8 na página do embed"
+        else:
             download_ok = processar_download(
                 url_m3u8,
                 caminho_pasta_temp,
@@ -319,19 +386,23 @@ def worker_download(url, pasta_destino, nome_arquivo_sugerido, item_dashboard,
                 atualizar_progresso
             )
 
-            if download_ok:
+            if not download_ok:
+                motivo_falha = "download dos segmentos HLS falhou"
+            else:
                 item_dashboard['status'] = 'convertendo'
                 if converter_final(nome_limpo, pasta_destino, caminho_pasta_temp,
                            ao_progresso=marcar_progresso_conversao):
                     limpar_pasta(caminho_pasta_temp)
                     video_ok = True
+                else:
+                    motivo_falha = "FFmpeg não converteu os segmentos em .mp4"
 
     # E. Finalização e Relatório
     if video_ok:
         item_dashboard['status'] = 'sucesso'
         item_dashboard['progresso'] = item_dashboard['total']  # Garante barra 100%
     else:
-        item_dashboard['status'] = 'erro'
+        _marcar_erro(item_dashboard, nome_limpo, pasta_destino, motivo_falha)
         # Em caso de erro, limpamos a temp para não deixar lixo corrompido ocupando espaço
         limpar_pasta(caminho_pasta_temp)
 

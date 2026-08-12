@@ -107,3 +107,55 @@ def test_barra_so_anda_para_frente_ao_trocar_de_etapa():
     """Vídeo cheio nunca pode marcar mais que áudio começando."""
     assert _pct('baixando video', 1.0) <= _pct('baixando audio', 0.0)
     assert _pct('baixando audio', 1.0) <= FAIXA_CONVERSAO[0]
+
+
+# --- HISTÓRICO: erro na frente, e com motivo ---
+
+def _render(painel, largura):
+    from rich.console import Console
+    console = Console(width=largura, record=True)
+    console.print(painel)
+    return console.export_text()
+
+
+def test_historico_mostra_o_motivo_do_erro():
+    """RELATADO: 'deu um erro e eu nem sei o que foi'.
+
+    O motivo ia só para `logs/erros.log`, e quem olha o painel não abre arquivo.
+    """
+    itens = [{'nome': 'Aula X', 'status': 'erro',
+              'motivo': 'nao achei o .m3u8', 'folder': 'C/M'}]
+    saida = _render(db._gerar_painel_historico(itens), 100)
+    assert 'Aula X' in saida
+    assert 'nao achei o .m3u8' in saida, "o painel diz 'erro' e não diz de quê"
+
+
+def test_erro_tem_prioridade_sobre_sucesso_no_historico():
+    # Sucesso o resumo já conta; o motivo do erro não aparece em nenhum outro lugar.
+    itens = ([{'nome': f'ok {i}', 'status': 'sucesso', 'folder': 'C/M'} for i in range(5)]
+             + [{'nome': 'quebrada', 'status': 'erro', 'motivo': 'FFmpeg falhou',
+                 'folder': 'C/M'}])
+    saida = _render(db._gerar_painel_historico(itens), 100)
+    assert 'quebrada' in saida and 'FFmpeg falhou' in saida
+
+
+def test_historico_nunca_estoura_a_altura_orcada():
+    """A linha não pode quebrar em duas, em NENHUMA largura de terminal.
+
+    MEDIDO: com corte de largura fixa, num terminal de 80 colunas o painel rendeu
+    8 linhas contra o orçamento de 5 — e o `Live` então empilha quadros, virando a
+    cascata de bordas que já apareceu na tela. Quem decide onde cortar tem que ser
+    o Rich no render (`no_wrap` + `overflow`), não uma constante nossa.
+    """
+    itens = [{'nome': 'N' * 80, 'status': 'erro', 'motivo': 'M' * 200, 'folder': 'C/M'}
+             for _ in range(3)]
+    painel = db._gerar_painel_historico(itens)
+    for largura in (40, 60, 80, 100, 200):
+        linhas = _render(painel, largura).strip().splitlines()
+        assert len(linhas) <= db.ALTURA_HISTORICO, \
+            f"estourou em {largura} colunas: {len(linhas)} linhas"
+
+
+def test_historico_vazio_nao_quebra():
+    saida = _render(db._gerar_painel_historico([]), 100)
+    assert 'Nenhum download finalizado' in saida

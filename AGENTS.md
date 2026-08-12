@@ -101,10 +101,20 @@ reais são `nível × 12`.
 - Temporários em `hls-temp/`, limpos na subida (`app.py:102`) e no encerramento
   (`encerrar()`, `app.py:57`, com handlers de SIGINT/SIGTERM em `:78-79` **e**
   `except KeyboardInterrupt` em `:114` — no Windows o Ctrl+C nem sempre vira sinal).
-- **Layout da saída (mudou na 4.0):** `output/<Comunidade>/<Curso>/<Módulo>/`, e a aula
-  que gera **2+ arquivos** ganha pasta própria com o nome dela (`routes.py:161`); com um
-  arquivo só, ele fica solto. `_adotar_arquivos_soltos` (`routes.py:66`) recolhe o que
-  foi baixado no layout antigo, para não rebaixar.
+- **Layout da saída (mudou em 12/08/2026):**
+  `output/<Comunidade>/<Curso>/<Módulo>/<Aula>/` — **toda** aula ganha pasta própria,
+  com 1 arquivo ou com 5. O lugar é função da **identidade** da aula; o conteúdo só
+  decide QUAIS arquivos existem, nunca ONDE ficam.
+  Antes a pasta só nascia a partir de 2 artefatos, o que amarrava o caminho ao conteúdo
+  do pedido — com `desc` virava pasta, sem `desc` ficava solto. Medido: um curso inteiro
+  foi rebaixado, com os vídeos soltos ao lado das pastas antigas, porque o "já baixei?"
+  procurava num caminho que a própria regra tinha mudado.
+  `_adotar_arquivos_soltos` (`routes.py:66`) recolhe o que foi baixado no layout antigo.
+  `migrar_layout.py` reorganiza o que já está em disco (**simula por padrão**).
+- **Nome de caminho tem teto:** `LIMITE_NOME = 80` (`services/utils.py`). Com pasta por
+  aula o nome entra duas vezes no caminho, e o Windows corta em 260.
+- **Erro guarda motivo:** `_marcar_erro` (`routes.py`) grava no item **e** em
+  `logs/erros.log` (`services/registro.py`). `print` sozinho some no repaint do painel.
 - **Dedup:** pula se o `.mp4` final existe e passa de 1 MB — em **três** lugares que
   precisam concordar: `downloader.py:224`, `converter.py:28`, `ytdlp.py:129`.
 - Subpasta de canal do YouTube (`output/YouTube/<Canal>/`) vale **só para link colado**

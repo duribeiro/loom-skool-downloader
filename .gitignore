@@ -11,6 +11,9 @@ hls-content/
 
 # Logs e Sistemas
 *.log
+# Log de erros do servidor (services/registro.py). Fica em disco justamente para
+# sobreviver ao repaint do dashboard — mas é diagnóstico local, não vai pro repo.
+logs/
 .DS_Store
 # Ignorar pasta de lixo/backup
 trash/

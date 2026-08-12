@@ -20,3 +20,8 @@ PASTA_OUTPUT = os.path.join(_DIR_RAIZ, "output")
 # Relativo ao diretório de trabalho: onde ficam os .ts temporários.
 # É relativo de propósito — o servidor deve rodar de loom-downloader-tool/.
 PASTA_TEMP_RAIZ = "hls-temp"
+
+# Absoluto, como PASTA_OUTPUT: o log não pode depender de onde o servidor foi
+# iniciado, senão some quando mais se precisa dele.
+PASTA_LOGS = os.path.join(_DIR_RAIZ, "logs")
+ARQUIVO_ERROS = os.path.join(PASTA_LOGS, "erros.log")
