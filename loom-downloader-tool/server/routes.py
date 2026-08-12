@@ -187,6 +187,14 @@ def worker_download(url, pasta_destino, nome_arquivo_sugerido, item_dashboard,
     # travado. O caminho do Loom já sinalizava isso na mão (item E, mais abaixo).
     def marcar_convertendo():
         item_dashboard['status'] = 'convertendo'
+        item_dashboard['eta'] = None      # o ffmpeg não estima; melhor nada que mentira
+
+    # A FASE do yt-dlp (vídeo / áudio) e o tempo restante da faixa atual. Vídeo e
+    # áudio são downloads separados: sem isto o painel dizia só "Baixando" e a barra
+    # parecia congelada em 100% durante todo o áudio. RELATADO no uso real.
+    def marcar_fase(fase, eta):
+        item_dashboard['status'] = fase
+        item_dashboard['eta'] = eta
 
     # C. Gravar o texto da aula (independe do vídeo; aula só-texto também tem).
     # Sem vídeo, gravamos o .md mesmo vazio (placeholder) — assim uma aula do
@@ -232,19 +240,19 @@ def worker_download(url, pasta_destino, nome_arquivo_sugerido, item_dashboard,
         # YouTube: o yt-dlp resolve formato + fusão vídeo/áudio com ffmpeg.
         # Não passa pelo HLS nem pelo converter — grava direto o .mp4 final.
         video_ok = baixar_youtube(url, pasta_destino, nome_limpo, atualizar_progresso,
-                                  ao_converter=marcar_convertendo)
+                                  ao_converter=marcar_convertendo, ao_fase=marcar_fase)
     elif eh_url_vimeo(url):
         # Vimeo (privado no Skool): mesmo motor do YouTube, mas com o Referer da
         # página — é o que libera o vídeo restrito por domínio.
         video_ok = baixar_vimeo(url, pasta_destino, nome_limpo, referer, atualizar_progresso,
-                                ao_converter=marcar_convertendo)
+                                ao_converter=marcar_convertendo, ao_fase=marcar_fase)
     elif eh_url_skool_video(url):
         # Vídeo hospedado no próprio Skool (Mux). A extensão já resolveu o token e
         # mandou o .m3u8 pronto — aqui é só baixar. Não passa pelo motor HLS do Loom:
         # o master do Mux tem URIs absolutas e nomes de segmento que colidem entre
         # vídeo e áudio (ver services/skool.py).
         video_ok = baixar_skool(url, pasta_destino, nome_limpo, atualizar_progresso,
-                                ao_converter=marcar_convertendo)
+                                ao_converter=marcar_convertendo, ao_fase=marcar_fase)
     else:
         # Loom (e afins via embed): extrai o .m3u8 e baixa o HLS.
         _, url_m3u8 = extrair_metadados(url)
