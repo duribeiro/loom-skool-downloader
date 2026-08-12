@@ -20,7 +20,29 @@ DASHBOARD_DATA = []
 _CONCLUIDAS_EM = {}
 
 _STATUS_FINAL = ('sucesso', 'erro')
-_STATUS_ATIVO = ('baixando', 'convertendo')
+_STATUS_ATIVO = ('baixando', 'baixando video', 'baixando audio', 'convertendo')
+
+# Rótulo de cada fase. Sem distinguir vídeo de áudio, o painel dizia só "Baixando"
+# e a barra parecia congelada em 100% durante todo o download do áudio — o yt-dlp
+# baixa as duas faixas SEPARADAS. Aconteceu de verdade e quase custou um servidor
+# derrubado no meio de 400 MB já baixados.
+_ROTULO_STATUS = {
+    'baixando video': 'Baixando vídeo ⬇',
+    'baixando audio': 'Baixando áudio 🔊',
+    'convertendo': 'Convertendo ⚙️',
+}
+
+
+def _formatar_eta(segundos):
+    """'faltam 3m20s'. Devolve '' quando não há estimativa — melhor calar que chutar."""
+    if not isinstance(segundos, (int, float)) or segundos < 0:
+        return ''
+    s = int(segundos)
+    if s >= 3600:
+        return f" · faltam {s // 3600}h{(s % 3600) // 60:02d}m"
+    if s >= 60:
+        return f" · faltam {s // 60}m{s % 60:02d}s"
+    return f" · faltam {s}s"
 
 
 def _instantaneo():
@@ -239,7 +261,8 @@ def _gerar_tabela_ativos(itens, max_fila=5):
         if item.get('total', 0) > 0:
             percentual = int((item.get('progresso', 0) / item['total']) * 100)
 
-        texto_status = "Convertendo ⚙️" if item.get('status') == 'convertendo' else "Baixando ⬇"
+        texto_status = (_ROTULO_STATUS.get(item.get('status'), "Baixando ⬇")
+                        + _formatar_eta(item.get('eta')))
 
         table.add_row(
             f"[bold]{item.get('nome', '?')}[/]",

@@ -106,7 +106,7 @@ def canal_via_ytdlp(url, referer=None):
 
 
 def baixar_com_ytdlp(url, pasta_relativa_destino, nome_arquivo, callback=None,
-                     referer=None, ao_converter=None):
+                     referer=None, ao_converter=None, ao_fase=None):
     """Baixa um vídeo na melhor qualidade em .mp4 via yt-dlp.
 
     `referer`, quando dado, vai no header — é o que libera Vimeo privado do Skool.
@@ -134,8 +134,6 @@ def baixar_com_ytdlp(url, pasta_relativa_destino, nome_arquivo, callback=None,
     estado = {"reportou_total": False, "ultimo_pct": 0, "faixa": None}
 
     def _hook(d):
-        if not callback:
-            return
         if d.get("status") != "downloading":
             return
 
@@ -143,16 +141,34 @@ def baixar_com_ytdlp(url, pasta_relativa_destino, nome_arquivo, callback=None,
         # SEPARADOS, um depois do outro. Como `ultimo_pct` só cresce, a barra
         # chegava a 100% no fim do vídeo e ficava CONGELADA lá durante todo o
         # áudio e a junção — em vídeo longo isso são minutos parecendo travamento.
-        # RELATADO: 4 aulas de Office Hours em "100% baixando" sem sair do lugar,
-        # enquanto o disco mostrava 1,5 MB/s de progresso real.
-        # Faixa nova = barra reinicia. Voltar a 0 é feio, mas é honesto: mostra
-        # que há trabalho acontecendo, e o congelado dizia o oposto.
-        faixa = d.get("filename") or d.get("info_dict", {}).get("format_id")
+        # RELATADO no uso real: 4 aulas de Office Hours em "100% baixando" sem sair
+        # do lugar, enquanto o disco mostrava 1,5 MB/s de progresso de verdade. O
+        # dono do projeto quase derrubou o servidor achando que tinha travado.
+        #
+        # Não basta reiniciar a barra: voltar a zero sem dizer por quê troca um
+        # engano por outro. Por isso a FASE vai junto, e o painel a exibe.
+        info = d.get("info_dict") or {}
+        if info.get("vcodec") == "none":
+            fase = "baixando audio"
+        elif info.get("acodec") == "none":
+            fase = "baixando video"
+        else:
+            fase = "baixando"       # faixa única, já com áudio e vídeo
+
+        faixa = d.get("filename") or info.get("format_id")
         if faixa != estado["faixa"]:
             estado["faixa"] = faixa
             estado["ultimo_pct"] = 0
             estado["reportou_total"] = False
 
+        # ETA vem pronto do yt-dlp, em segundos, e é por FAIXA — não é o tempo
+        # total até o .mp4 final. Melhor um número honesto de escopo limitado do
+        # que uma estimativa global inventada.
+        if ao_fase:
+            ao_fase(fase, d.get("eta"))
+
+        if not callback:
+            return
         if not estado["reportou_total"]:
             callback(total=100)
             estado["reportou_total"] = True

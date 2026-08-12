@@ -178,7 +178,7 @@ def baixar_anexos(anexos, pasta_relativa_destino, nome_aula, prefixar=True):
 
 
 def baixar_skool(url, pasta_relativa_destino, nome_arquivo, callback=None,
-                 ao_converter=None):
+                 ao_converter=None, ao_fase=None):
     """Baixa um vídeo hospedado no Skool a partir da URL do `.m3u8`.
 
     Devolve True/False. Toda falha é impressa com motivo — nunca engolida.
@@ -190,4 +190,4 @@ def baixar_skool(url, pasta_relativa_destino, nome_arquivo, callback=None,
 
     return baixar_com_ytdlp(url, pasta_relativa_destino, nome_arquivo,
                             callback=callback, referer=REFERER_SKOOL,
-                            ao_converter=ao_converter)
+                            ao_converter=ao_converter, ao_fase=ao_fase)
