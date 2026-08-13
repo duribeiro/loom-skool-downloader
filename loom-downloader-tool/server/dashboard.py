@@ -350,7 +350,14 @@ def _gerar_painel_historico(itens):
     for item in erros[-3:]:
         nome = _cortar(item.get('nome'), _MAX_NOME_HISTORICO)
         motivo = item.get('motivo') or 'motivo não registrado'
-        linhas.append(f"[red]❌ {nome}[/] [dim]— {motivo}[/]")
+
+        # ONDE a aula fica, não só o nome dela. RELATADO em 13/08/2026: "só aparece
+        # o nome da aula, e eu não saberia onde ela fica". Com 22 cursos e centenas
+        # de aulas — várias homônimas entre módulos ("Enviar 20 mensagens de
+        # prospecção" aparece em 6 dias diferentes) — o nome sozinho não localiza.
+        curso, modulo = _partes_do_caminho(item)
+        onde = f"{curso}/{modulo}" if modulo else curso
+        linhas.append(f"[red]❌ {nome}[/] [dim]· {onde} — {motivo}[/]")
 
     for item in sucessos[-(3 - len(linhas)):] if len(linhas) < 3 else []:
         linhas.append(f"✅ {_cortar(item.get('nome'), _MAX_NOME_HISTORICO)}")

@@ -159,3 +159,23 @@ def test_historico_nunca_estoura_a_altura_orcada():
 def test_historico_vazio_nao_quebra():
     saida = _render(db._gerar_painel_historico([]), 100)
     assert 'Nenhum download finalizado' in saida
+
+
+def test_historico_diz_ONDE_a_aula_falhou():
+    """RELATADO em 13/08/2026: "só aparece o nome da aula e eu não saberia onde ela
+    fica". Com aulas homônimas entre módulos ("Enviar 20 mensagens de prospecção"
+    aparece em 6 dias diferentes), o nome sozinho não localiza nada."""
+    itens = [{'nome': 'Enviar 20 mensagens de prospecção', 'status': 'erro',
+              'motivo': 'FFmpeg falhou',
+              'folder': 'AI Makers Club/Bootcamp Mês 1/03 - Dia 3/02 - Enviar 20'}]
+    saida = _render(db._gerar_painel_historico(itens), 160)
+
+    assert 'Bootcamp Mês 1' in saida, 'não dá para saber de que curso é'
+    assert '03 - Dia 3' in saida, 'não dá para saber de que módulo é'
+    assert 'FFmpeg falhou' in saida
+
+
+def test_historico_sem_modulo_nao_quebra():
+    # Link colado / Loom avulso não têm módulo.
+    itens = [{'nome': 'Video', 'status': 'erro', 'motivo': 'x', 'folder': 'Loom'}]
+    assert 'Loom' in _render(db._gerar_painel_historico(itens), 100)

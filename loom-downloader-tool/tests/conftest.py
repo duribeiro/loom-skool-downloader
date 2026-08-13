@@ -16,6 +16,28 @@ sys.path.insert(0, os.path.join(RAIZ, "server"))
 
 
 @pytest.fixture(autouse=True)
+def _output_isolado_sempre(tmp_path, monkeypatch):
+    """NENHUM teste escreve na `output/` de verdade.
+
+    MEDIDO em 13/08/2026: a biblioteca real ficou com `Com/Curso/Modulo/Aula 1` e
+    `Com/Curso/Modulo/Meu Video` — nomes de FIXTURE. A causa foi minha: ao mover a
+    criação da pasta para dentro da trava de caminho, `worker_download` passou a
+    chamar `os.makedirs` com `routes.PASTA_OUTPUT`, e a fixture `output_isolado` só
+    trocava o `PASTA_OUTPUT` de `services.texto`.
+
+    `autouse` porque a poluição vem de testes que nem falam de pasta. Testes que
+    precisam do caminho real dentro do tmp continuam podendo sobrescrever depois —
+    monkeypatch aplicado por último vence.
+    """
+    import routes
+    from services import caminhos, converter, downloader, skool, texto, ytdlp
+
+    for modulo in (routes, caminhos, converter, downloader, skool, texto, ytdlp):
+        if hasattr(modulo, "PASTA_OUTPUT"):
+            monkeypatch.setattr(modulo, "PASTA_OUTPUT", str(tmp_path / "output"))
+
+
+@pytest.fixture(autouse=True)
 def _log_de_erros_isolado(tmp_path, monkeypatch):
     """Nenhum teste escreve no `logs/erros.log` do projeto.
 
