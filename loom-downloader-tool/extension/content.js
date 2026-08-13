@@ -987,6 +987,42 @@ async function enfileirarComunidadeDaAba(aoProgredir) {
 // Fábrica do pill: mesmo visual em Loom e Vimeo (o youtube.js tem a sua, idêntica).
 // O ícone vem do ui.css (.sf-pill__ico); o texto fica num span para trocar o
 // rótulo/estado sem perder o ícone. `fixo` = canto da tela; senão overlay no vídeo.
+// --- O PILL PERTENCE A UMA AULA ---
+//
+// RISCO REPRODUZIDO em 13/08/2026: numa aula cujo vídeo mora em post fixado não há
+// player na página, e o pill é anexado ao `document.body` — que SOBREVIVE à
+// navegação SPA do Skool. Marcando o pill da aula #2 e navegando para a #1 sem F5:
+//
+//     qtdPills : 1
+//     marcas   : ["PILL-DA-AULA-8a182e0c"]   <- o pill da aula #2, na tela da #1
+//
+// E a guarda `if (document.getElementById(...)) return;` impedia a criação do pill
+// certo. O clique então resolvia o vídeo da aula ANTERIOR, enquanto o nome e a pasta
+// vinham da aula ATUAL: arquivo com o nome certo e o conteúdo errado — o pior tipo
+// de defeito, porque não parece defeito.
+//
+// Não é canto raro: 12 das 20 aulas de Founders Talk e 37 das 85 de Office Hours
+// não têm player próprio.
+
+function _mdAtual() {
+    return new URLSearchParams(location.search).get('md') || '';
+}
+
+function pillDaAulaAtual(id) {
+    /** Devolve o pill SE ele for desta aula. Se for de outra, remove e devolve null. */
+    const existente = document.getElementById(id);
+    if (!existente) return null;
+    if (existente.dataset.md === _mdAtual()) return existente;
+    existente.remove();
+    return null;
+}
+
+function marcarPillComAula(btn) {
+    btn.dataset.md = _mdAtual();
+    return btn;
+}
+
+
 function criarPill(rotulo, fixo) {
     const btn = document.createElement('button');
     btn.className = 'sf-pill ' + (fixo ? 'sf-pill--fixed' : 'sf-pill--overlay');
@@ -1166,7 +1202,7 @@ function criarBotaoVimeo() {
     // Se o botão já existe e nasceu no canto (o iframe do Vimeo carregou DEPOIS, pois
     // o id foi detectado pela Performance API antes do iframe entrar no DOM),
     // reancora sobre o vídeo assim que o iframe aparecer.
-    const existente = document.getElementById('sf-vimeo');
+    const existente = pillDaAulaAtual('sf-vimeo');
     if (existente) {
         if (iframe && existente.classList.contains('sf-pill--fixed')) ancorarPillNoIframe(existente, iframe);
         return;
@@ -1174,6 +1210,7 @@ function criarBotaoVimeo() {
 
     const btn = criarPill('Baixar vídeo', !iframe);   // overlay se já há iframe; senão canto
     btn.id = 'sf-vimeo';
+    marcarPillComAula(btn);
 
     btn.onclick = async () => {
         if (btn.disabled) return;
@@ -1280,6 +1317,8 @@ function criarBotaoLoomNativo() {
 // Aqui detectamos a aula aberta e ancoramos o pill sobre o player.
 
 let _skoolVideoTentado = '';   // md já processado, para o observador não refazer fetch
+const _skoolTentativas = new Map();   // md -> quantas vezes tentamos resolver o vídeo
+const _MAX_TENTATIVAS_SKOOL = 3;      // depois disso, avisa e para (evita enxurrada)
 
 function acharPlayerSkool() {
     // MEDIDO: antes do play não existe <video> NEM <img> — a thumbnail do Mux entra
@@ -1316,13 +1355,32 @@ async function criarBotaoVideoSkool() {
     const md = new URLSearchParams(location.search).get('md');
     if (!md || !/\/classroom\//.test(location.pathname)) return;
     if (_skoolVideoTentado === md) return;        // já resolvido/descartado nesta aula
-    if (document.getElementById('sf-skool')) return;
+    if (pillDaAulaAtual('sf-skool')) return;
 
     _skoolVideoTentado = md;                      // marca ANTES do await: o observador
                                                   // dispara muitas vezes por segundo e
                                                   // sem isto viraria enxurrada de fetch.
     const pp = await obterPagePropsDoCurso();
-    if (!pp || !pp.course) return;
+    if (!pp || !pp.course) {
+        // FALHA PASSAGEIRA MERECE OUTRA CHANCE.
+        //
+        // A marca acima existe para conter a enxurrada de fetch do observador, mas
+        // ela também trancava a aula: um `obterPagePropsDoCurso` que falhasse UMA vez
+        // (rede oscilando, JSON ainda não pronto na troca de aula) deixava a aula sem
+        // botão até um F5 — e o usuário não tem como saber que foi isso.
+        //
+        // Liberar sem limite viraria a enxurrada de volta, então o número de
+        // tentativas é contado por aula.
+        const tentativas = (_skoolTentativas.get(md) || 0) + 1;
+        _skoolTentativas.set(md, tentativas);
+        if (tentativas < _MAX_TENTATIVAS_SKOOL) {
+            _skoolVideoTentado = '';
+        } else {
+            console.warn(`[Sifão] desisti de resolver o vídeo da aula ${md} após ` +
+                         `${tentativas} tentativas; recarregue a página (F5).`);
+        }
+        return;
+    }
     const unit = coletarUnits(pp.course)[md];
     if (!unit) return;
     const meta = metaDe(unit) || {};
@@ -1338,10 +1396,11 @@ async function criarBotaoVideoSkool() {
     const pins = meta.videoId ? [] : postsFixadosComVideo(pp);
     if (!meta.videoId && !pins.length) return;    // sem vídeo em lugar nenhum
 
-    if (document.getElementById('sf-skool')) return;
+    if (pillDaAulaAtual('sf-skool')) return;
     const alvo = acharPlayerSkool();
     const btn = criarPill('Baixar vídeo', !alvo);   // sem player achado, vai pro canto
     btn.id = 'sf-skool';
+    marcarPillComAula(btn);
 
     btn.onclick = async () => {
         if (btn.disabled) return;
