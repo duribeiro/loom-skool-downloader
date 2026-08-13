@@ -1,6 +1,37 @@
 # Barra de progresso que não mente
 
-> **STATUS: PARCIAL.** Três defeitos corrigidos, um aberto — o principal.
+> **STATUS: FECHADO em 12/08/2026** (commit `dc68c70`). Os quatro defeitos corrigidos.
+>
+> O item que ficou aberto por último — "os 100% mortos entre etapas" — foi
+> implementado exatamente como o desenho abaixo previa: `FAIXA_DA_FASE`
+> (`services/ytdlp.py`) com vídeo 0→45 e áudio 45→85, e `FAIXA_CONVERSAO`
+> (`server/routes.py`) com 85→99. A conversão deixou de ser estimativa: o FFmpeg
+> reporta progresso REAL via `-progress pipe:1` (`services/converter.py`), medido
+> em 12/08/2026 (`out_time_ms=2800000` num clipe de 3s).
+>
+> **CORREÇÃO (12/08/2026, mesma data).** Este documento chegou a ser fechado dizendo
+> que a faixa da conversão estava valendo. **No caminho HLS do Loom ela nunca valeu.**
+>
+> Pego no `/code-review high` e reproduzido: ali o `progresso` conta SEGMENTOS
+> (0..N, com `total` = N). Ao entrar na conversão, `atualizar_progresso` fazia
+> `max(progresso, percentual)` — comparando **300 segmentos com 85 por cento**.
+> Resultado medido num vídeo de 300 segmentos:
+>
+> ```
+> conversao   0% -> pct_na_tela=100%
+> conversao  50% -> pct_na_tela=100%
+> conversao 100% -> pct_na_tela=100%
+> ```
+>
+> Ou seja: a barra ficava **travada em 100% durante toda a conversão** — exatamente a
+> queixa original que abriu este plano. A faixa 85→99 funcionava só no caminho do
+> yt-dlp, onde o progresso já é percentual.
+>
+> Corrigido zerando o `progresso` na TROCA DE UNIDADE (contagem → percentual), com
+> teste de regressão (`test_conversao_anda_depois_de_contar_segmentos`).
+>
+> **A lição:** dar por fechado sem exercitar o caminho específico é como este erro
+> passou. O commit `dc68c70` foi verificado no yt-dlp e o Loom nunca foi olhado.
 
 ## O problema, na palavra do dono do projeto
 

@@ -7,7 +7,7 @@ Orientações para o Claude Code (claude.ai/code) trabalhar neste repositório.
 
 ## O que é
 
-**Sifão** (nome do programa, `dashboard.py:293`; versão `4.0`, `dashboard.py:297`).
+**Sifão** (nome do programa, `dashboard.py:364`; versão `4.2`, `dashboard.py:371`).
 Baixador de aulas de comunidades do **Skool**, mais vídeos avulsos de YouTube, Vimeo
 e Loom. Arquitetura **híbrida**: uma extensão Chrome injeta um botão (pill) no player
 — ou enfileira um curso/comunidade inteira pelo popup — e dispara pedidos para um
@@ -96,9 +96,12 @@ Vale seguir esse trace antes de mexer em qualquer coisa:
    - resolve o nome quando o pedido veio sem ele, roteando por origem (`routes.py:124-136`);
    - YouTube **de link colado** ganha subpasta de canal (`routes.py:153`) — e **só**
      nesse caso; ver o comentário longo ali, é uma regressão já vivida;
-   - dá à aula uma **pasta própria, sempre** — com 1 arquivo ou com 5. O lugar é função
-     da **identidade** da aula; o conteúdo só decide QUAIS arquivos existem, nunca ONDE
-     ficam. Até 12/08/2026 a pasta só nascia a partir de 2 artefatos, o que amarrava o
+   - dá à aula uma **pasta própria, sempre** — com 1 arquivo ou com 5, e **numerada na
+     ordem do curso** (`01 - `, `02 - `). O lugar é função da **identidade** da aula; o
+     conteúdo só decide QUAIS arquivos existem, nunca ONDE ficam. Pasta que já existe
+     vence o nome calculado (`_pasta_existente_da_aula`), e um nome diferente do
+     desejado é **renomeado** em vez de rebaixado — por isso um "baixar tudo" numa
+     biblioteca pronta renumera 522 pastas sem baixar um byte. Até 12/08/2026 a pasta só nascia a partir de 2 artefatos, o que amarrava o
      caminho ao conteúdo do pedido: com `desc` a aula ganhava pasta, sem `desc` o arquivo
      ficava solto. Medido no uso real: o "já baixei?" procurava o `.mp4` num caminho que a
      própria regra tinha mudado, e um curso inteiro foi rebaixado com os vídeos soltos ao
@@ -170,9 +173,18 @@ downloads simultâneos). O vídeo do Skool ainda passa por `_diagnosticar`
   que um erro real ficou irrecuperável em 12/08/2026.
 - `corpoDoPedido` (`extension/content.js`) — os **cinco** POSTs da extensão montam o
   corpo aqui. Campo novo entra num lugar e vale para os cinco.
-- `pacoteDaAula` (`extension/content.js`) — pasta, nome e texto de uma aula. Os três
-  botões (comunidade, curso e pill) passam por ela; é o que garante que a mesma aula
-  caia sempre no mesmo caminho.
+- `pacoteDaAula` (`extension/content.js`) — pasta, nome, texto e **ordem** de uma aula.
+  Os três botões (comunidade, curso e pill) passam por ela; é o que garante que a mesma
+  aula caia sempre no mesmo caminho.
+- `ordemDasUnits` / `prefixoDeOrdem` (`extension/content.js`) e `prefixo_de_ordem`
+  (`services/utils.py`) — a numeração das pastas. Os dois lados **têm que concordar**,
+  senão o servidor cria uma pasta que a extensão não reconhece. A ordem sai da posição
+  no array `children`; MEDIDO em 12/08/2026 que **não existe campo de ordem** no Skool.
+- `_pasta_existente_da_aula` (`server/routes.py`) — acha a pasta da aula com ou sem
+  prefixo numérico. É o que permite renumerar sem rebaixar 62 GB; qualquer código novo
+  que precise localizar a pasta de uma aula passa por aqui.
+- `cortar_preservando_extensao` (`services/utils.py`) — para nome de arquivo COM
+  extensão (anexo). `limpar_nome_arquivo` corta cego e apaga o `.pdf`.
 
 ### Estado compartilhado
 

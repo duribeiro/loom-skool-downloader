@@ -38,13 +38,30 @@ IGNORAR = {"_BENCH", "_DUPLICADOS"}
 
 
 def _eh_pasta_de_aula(pasta):
-    """True se a pasta JÁ é a pasta de uma aula (contém arquivo com o mesmo nome)."""
-    nome = os.path.basename(pasta)
+    """True se a pasta JÁ é a pasta de uma aula (contém arquivo com o mesmo nome).
+
+    A comparação ignora PONTO FINAL. O Windows remove ponto do fim de nome de
+    PASTA mas mantém no de ARQUIVO, então uma aula chamada "por Luis F." vira a
+    pasta `por Luis F` com o arquivo `por Luis F..mp4` dentro.
+
+    MEDIDO em 12/08/2026: sem essa tolerância, 6 pastas já corretas (`Bem-vindo`,
+    `O tipo de agente que criamos aqui`, dois Founders Talk) eram lidas como "não
+    migradas", e o script propunha criar `Bem-vindo/Bem-vindo./` — que o Windows
+    normaliza para `Bem-vindo/Bem-vindo/`. É o aninhamento `Aula X/Aula X/` que
+    esta função existe justamente para impedir.
+
+    Também IGNORA O PREFIXO DE ORDEM. Desde a 4.2 a pasta da aula sai como
+    `01 - Aula X` e o arquivo dentro continua `Aula X.mp4`. PEGO NA REVISÃO em
+    12/08/2026 e medido: sem isso, `_eh_pasta_de_aula('01 - Aula X')` devolvia False,
+    o script tratava a pasta JÁ MIGRADA como arquivos soltos e propunha criar
+    `01 - Aula X/Aula X/` — o mesmo aninhamento, por outra porta.
+    """
+    nome = _sem_prefixo_de_ordem(os.path.basename(pasta)).rstrip('.')
     try:
         itens = os.listdir(pasta)
     except OSError:
         return False
-    return any(os.path.splitext(f)[0] == nome
+    return any(_sem_prefixo_de_ordem(os.path.splitext(f)[0]).rstrip('.') == nome
                for f in itens if os.path.isfile(os.path.join(pasta, f)))
 
 
@@ -96,18 +113,96 @@ def _destino_do_arquivo(aula, nome):
     return nome[len(prefixo):] if nome.startswith(prefixo) else nome
 
 
+def _sem_prefixo_de_ordem(nome):
+    """'03 - Aula X' -> 'Aula X'. Só corta prefixo de DÍGITOS."""
+    prefixo, sep, resto = nome.partition(" - ")
+    return resto if sep and prefixo.isdigit() else nome
+
+
+def _religar_anexos_orfaos(pasta, executar):
+    """Devolve o anexo solto à pasta da aula dele. Devolve (movidos, indecisos).
+
+    MEDIDO em 12/08/2026: 8 anexos ficaram soltos no módulo depois da migração de
+    layout. O motivo é o antigo `_nome_do_anexo`, que dividia o orçamento de
+    caracteres entre a aula e o arquivo e gravava o nome da aula TRUNCADO:
+
+        'Skill para atualizar CRM com anotações de - leads-notebook-full.zip'
+                                                ^ cortado no meio da palavra
+
+    Esse prefixo não bate com nenhum nome de aula inteiro, então nada os religava.
+    Mas ele É um prefixo literal do nome da aula — e, medido um a um, cada um dos 8
+    casa com EXATAMENTE UMA aula do módulo.
+
+    A regra é conservadora de propósito: move só com 1 candidato. Com 0 ou 2+,
+    deixa quieto e reporta. Escolher entre dois seria adivinhar, e o arquivo é do
+    usuário.
+    """
+    try:
+        nomes = os.listdir(pasta)
+    except OSError:
+        return 0, 0
+
+    aulas = [n for n in nomes if os.path.isdir(os.path.join(pasta, n))]
+    movidos = indecisos = 0
+
+    for nome in nomes:
+        origem = os.path.join(pasta, nome)
+        if not os.path.isfile(origem):
+            continue
+        base, ext = os.path.splitext(nome)
+        if ext.lower() in EXT_PRINCIPAIS:
+            continue                      # vídeo/texto não usam prefixo de aula
+        prefixo, sep, _ = nome.partition(" - ")
+        if not sep:
+            continue
+
+        candidatos = [a for a in aulas if _sem_prefixo_de_ordem(a).startswith(prefixo)]
+        if len(candidatos) != 1:
+            if candidatos:
+                print(f"      ⚠️  '{nome}' casa com {len(candidatos)} aulas; deixando.")
+                indecisos += 1
+            continue
+
+        destino = os.path.join(pasta, candidatos[0], nome[len(prefixo) + len(sep):])
+        if os.path.exists(destino):
+            print(f"      ⚠️  já existe, pulando: {os.path.basename(destino)}")
+            continue
+
+        print(f"      🔗 {nome}  ->  {candidatos[0]}/{os.path.basename(destino)}")
+        movidos += 1
+        if executar:
+            try:
+                os.replace(origem, destino)
+            except OSError as erro:
+                print(f"      ❌ falhou: {erro}")
+
+    return movidos, indecisos
+
+
 def migrar(executar=False):
     if not os.path.isdir(PASTA_OUTPUT):
         print(f"❌ Não achei a pasta output em {PASTA_OUTPUT}")
         return 1
 
     total_aulas = total_arquivos = conflitos = 0
+    total_religados = total_indecisos = 0
 
     for raiz, subpastas, _ in os.walk(PASTA_OUTPUT):
         # Poda as pastas de serviço antes de qualquer coisa.
         subpastas[:] = [s for s in subpastas if s not in IGNORAR]
 
         grupos = _agrupar(raiz)
+
+        # Anexo órfão vive num módulo que JÁ foi migrado — ou seja, sem grupos.
+        # Por isso esta passada é independente do `continue` abaixo.
+        if not _eh_pasta_de_aula(raiz):
+            religados, indecisos = _religar_anexos_orfaos(raiz, executar)
+            if religados or indecisos:
+                if not grupos:
+                    print(f"\n📂 {os.path.relpath(raiz, PASTA_OUTPUT)}")
+                total_religados += religados
+                total_indecisos += indecisos
+
         if not grupos:
             continue
 
@@ -144,6 +239,10 @@ def migrar(executar=False):
     print("\n" + "=" * 60)
     print(f"Aulas que ganham pasta : {total_aulas}")
     print(f"Arquivos movidos       : {total_arquivos}")
+    if total_religados:
+        print(f"Anexos órfãos religados: {total_religados}")
+    if total_indecisos:
+        print(f"Anexos ambíguos (nada) : {total_indecisos}")
     if conflitos:
         print(f"Conflitos pulados      : {conflitos}")
     if executar:

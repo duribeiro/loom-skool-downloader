@@ -107,6 +107,11 @@ function corpoDoPedido(dados, extras) {
     return JSON.stringify({
         folder: dados.folder,
         filename: dados.filename,
+        // Ordem da aula dentro do módulo. `null` quando não se sabe (link colado,
+        // Loom fora do Skool, ou curso cujo JSON não trouxe `children`) — e aí o
+        // servidor grava sem número em vez de inventar um.
+        ordem: dados.ordem || null,
+        ordemTotal: dados.ordemTotal || null,
         desc: dados.desc || '',
         resources: dados.resources || '',
         ...extras,
@@ -197,7 +202,49 @@ function coletarUnits(raiz) {
     return porId;
 }
 
-function caminhoDaAula(unit, porId) {
+// A ORDEM DO CURSO SÓ EXISTE NA POSIÇÃO DO ARRAY.
+//
+// MEDIDO em 12/08/2026, lendo o __NEXT_DATA__ de ai-makers ao vivo: a unit do Skool
+// tem `id, name, metadata, createdAt, updatedAt, unitType, rootId, userId, groupId,
+// state, public` e a metadata tem `coverImage, coverImageFile, desc, hasAccess,
+// numModules, privacy, title`. **Não existe campo de ordem.** A sequência vem de
+// `pageProps.course.children[]`, aninhado: módulos no primeiro nível, aulas no
+// segundo. Se essa posição se perder, a ordem não é recuperável de lugar nenhum.
+//
+// Por que isso importa: no disco as pastas ordenam alfabeticamente, e aí "Dia 10"
+// vem antes de "Dia 2". Pior: no Dia 1, a PRIMEIRA aula ("Wins do Mês 1") cai em
+// último. O curso tem sequência pedagógica e o disco a destrói.
+//
+// `coletarUnits` guarda tudo num dicionário por id e joga o array fora — por isso
+// esta função separada, que anda pelos `children` só para colher os índices.
+function ordemDasUnits(raiz) {
+    const mapa = {};
+    if (!raiz || !Array.isArray(raiz.children)) return mapa;
+
+    (function anda(no) {
+        const filhos = Array.isArray(no.children) ? no.children : [];
+        filhos.forEach((filho, i) => {
+            const u = filho && filho.course;
+            if (u && typeof u.id === 'string') {
+                mapa[u.id] = { ordem: i + 1, total: filhos.length };
+            }
+            if (filho) anda(filho);
+        });
+    })(raiz);
+
+    return mapa;
+}
+
+// `NN - `, com o padding calculado pelo TOTAL do nível.
+// Padding fixo é como o bug do "Dia 10 antes do Dia 2" volta: com 2 dígitos num
+// módulo de 100+ aulas, a 100ª ordenaria antes da 20ª.
+function prefixoDeOrdem(info) {
+    if (!info || !info.ordem) return '';
+    const largura = Math.max(2, String(info.total || info.ordem).length);
+    return String(info.ordem).padStart(largura, '0') + ' - ';
+}
+
+function caminhoDaAula(unit, porId, ordens) {
     // Sobe pela cadeia parentId: os 'set' viram Módulos; o 'course' vira Curso.
     const modulos = [];
     let curso = null;
@@ -206,7 +253,12 @@ function caminhoDaAula(unit, porId) {
     while (atual && guarda++ < 20) {
         const m = metaDe(atual) || {};
         if (atual.unitType === 'course') { curso = m.title; break; }
-        if (atual.unitType === 'set') modulos.unshift(m.title);
+        // O módulo já sai numerado: é a extensão que conhece a ordem, o servidor não.
+        // Sem `ordens` (fallback da varredura genérica), sai sem número — nunca
+        // inventamos posição.
+        if (atual.unitType === 'set') {
+            modulos.unshift(prefixoDeOrdem(ordens && ordens[atual.id]) + m.title);
+        }
         atual = porId[atual.parentId];
     }
     return { curso, modulos };
@@ -283,6 +335,18 @@ function extrairAulas(pp) {
     const comunidade = (cg.metadata && cg.metadata.displayName) || cg.name || 'Skool';
     const porId = coletarUnits(pp.course);
 
+    // A ordem vem do array `children`; `coletarUnits` (dicionário por id) a descarta.
+    //
+    // As duas travessias convivem de propósito. A genérica é resistente a o Skool
+    // mudar o aninhamento — foi ela que sobreviveu a cada mudança até aqui. Ler
+    // `children` nos acopla a esse formato, então ela entra só para a ordem, e a
+    // ausência dela AVISA em vez de sumir calada (o padrão de falha desta base).
+    const ordens = ordemDasUnits(pp.course);
+    if (!Object.keys(ordens).length) {
+        console.warn('[Sifão] sem `children` no JSON do curso: as pastas sairão SEM ' +
+                     'numeração e a ordem do curso não será preservada no disco.');
+    }
+
     // Diagnóstico: quantos units de cada unitType existem. Se uma aula "não baixa",
     // isto revela na hora se ela era de um tipo que estávamos descartando.
     const porTipo = {};
@@ -295,7 +359,7 @@ function extrairAulas(pp) {
         // Todo o resto é folha e ENTRA, seja qual for o unitType: assim uma aula
         // de texto (unitType diferente de 'module') não some em silêncio.
         if (CONTAINERS.has(unit.unitType)) continue;
-        aulas.push(pacoteDaAula(unit, porId, comunidade));
+        aulas.push(pacoteDaAula(unit, porId, comunidade, ordens));
     }
 
     // DIAGNÓSTICO POR MÓDULO — não é enfeite.
@@ -325,7 +389,7 @@ function extrairAulas(pp) {
 // nunca `desc`/`resources`. Resultado medido: "baixar vídeo" jamais gerava .md, e
 // gravava num caminho diferente do que os outros dois botões usariam para a MESMA
 // aula. Duas fontes de verdade para a mesma pasta divergem por construção.
-function pacoteDaAula(unit, porId, comunidade) {
+function pacoteDaAula(unit, porId, comunidade, ordens) {
         const meta = metaDe(unit) || {};
         const videoLink = meta.videoLink || '';
         const ehLoom = /loom\.com\/(embed|share)\//.test(videoLink);
@@ -358,16 +422,23 @@ function pacoteDaAula(unit, porId, comunidade) {
         // suma sem aviso. Só aulas com vídeo de OUTRA plataforma (YouTube etc.)
         // seguem sem o .mp4 — mas o texto/registro ainda vai.
 
-        const { curso, modulos } = caminhoDaAula(unit, porId);
+        const { curso, modulos } = caminhoDaAula(unit, porId, ordens);
         const pasta = [comunidade, curso, ...modulos]
             .filter(Boolean)
             .map(limparTexto)
             .join('/');
 
+        // A ordem da AULA vai separada, não colada no nome: quem monta a pasta dela
+        // é o servidor (`worker_download`), que precisa do nome limpo para achar a
+        // pasta já existente — numerada ou não (`_pasta_existente_da_aula`).
+        const minhaOrdem = (ordens && ordens[unit.id]) || null;
+
         return {
             url: ehLink ? videoLink : '',   // do Skool, a URL só nasce na fase 1
             folder: pasta,
             filename: limparTexto(meta.title || 'Aula sem titulo'),
+            ordem: minhaOrdem ? minhaOrdem.ordem : null,
+            ordemTotal: minhaOrdem ? minhaOrdem.total : null,
             desc: desc,
             resources: resources,
             _videoId: videoIdSkool,
@@ -946,10 +1017,10 @@ async function dadosDaAulaAtual() {
     const cg = pp.currentGroup || {};
     const comunidade = (cg.metadata && cg.metadata.displayName) || cg.name || 'Skool';
 
-    // MESMA função que os outros dois botões usam. Vem com `desc`/`resources`
-    // junto, e é isso que faz o pill gerar o .md — antes ele postava só
-    // {url, folder, filename} e a aula baixada por ele nunca tinha texto.
-    return pacoteDaAula(unit, porId, comunidade);
+    // MESMA função que os outros dois botões usam. Vem com `desc`/`resources` e
+    // com a ORDEM junto, e é isso que faz o pill gerar o .md e cair na mesma pasta
+    // numerada — antes ele postava só {url, folder, filename}.
+    return pacoteDaAula(unit, porId, comunidade, ordemDasUnits(pp.course));
 }
 
 function criarBotaoDownload(iframe) {

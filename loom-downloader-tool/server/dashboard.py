@@ -362,10 +362,13 @@ def _gerar_painel_historico(itens):
     )
 
 NOME_PROGRAMA = "Sifão"
-# 4.0 e não 3.1: além das features novas (comunidade inteira, vídeo do Skool,
-# anexos), o LAYOUT DA SAÍDA mudou — aulas com 2+ arquivos passam a ter pasta
-# própria. Quem já tem biblioteca vê a estrutura mudar, e isso é quebra de contrato.
-VERSAO = "4.1"
+# A versão MAIOR sobe quando o LAYOUT DA SAÍDA muda, não quando entram features:
+# quem já tem biblioteca vê a estrutura mudar, e isso é quebra de contrato.
+#
+# 4.2: toda aula ganha pasta própria (antes só a partir de 2 arquivos) e as pastas
+# saem NUMERADAS na ordem do curso. Renumerar não custa download — o servidor acha
+# a pasta com ou sem prefixo (`_pasta_existente_da_aula`).
+VERSAO = "4.2"
 
 # Cada bloco carrega UMA linha de respiro embaixo (ver _com_respiro). As alturas
 # abaixo já incluem essa linha — o orçamento da tela precisa contá-la, senão o

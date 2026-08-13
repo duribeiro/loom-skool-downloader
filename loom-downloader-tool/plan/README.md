@@ -19,8 +19,7 @@ explícita.
 
 | Documento | Assunto |
 |---|---|
-| [barra-de-progresso.md](a-fazer/barra-de-progresso.md) | Barra parada em 100% enquanto ainda há trabalho; progresso real do ffmpeg |
-| [worker-que-morre.md](a-fazer/worker-que-morre.md) | Duas aulas cujo worker estoura — a blindagem já existe, falta a causa |
+| [ordem-das-aulas-no-disco.md](a-fazer/ordem-das-aulas-no-disco.md) | Disco ordena alfabeticamente e destrói a sequência do curso; a ordem só existe na posição do array `children` |
 | [limpeza-orfaos-ytdlp.md](a-fazer/limpeza-orfaos-ytdlp.md) | ~1 GB de `._yt_*` órfãos de reinícios de servidor |
 | [outras-comunidades.md](a-fazer/outras-comunidades.md) | Pastas de canal do YouTube nas 4 comunidades não medidas |
 | [extensao-standalone.md](a-fazer/extensao-standalone.md) | Tirar a dependência do servidor Python |
@@ -29,6 +28,9 @@ explícita.
 
 | Documento | Assunto |
 |---|---|
+| [pasta-sempre-e-caminho-unico.md](feito/pasta-sempre-e-caminho-unico.md) | Toda aula ganha pasta; um caminho só para os três botões. Migração de 249 arquivos, sem perda |
+| [barra-de-progresso.md](feito/barra-de-progresso.md) | Barra em faixas por etapa; progresso REAL do ffmpeg via `-progress pipe:1` |
+| [worker-que-morre.md](feito/worker-que-morre.md) | Worker que estourava virava "baixando" eterno; hoje vira erro COM motivo em disco |
 | [video-em-post-fixado.md](feito/video-em-post-fixado.md) | 52 de 280 aulas com vídeo em post fixado, perdidas em silêncio |
 | [benchmark-concorrencia.md](feito/benchmark-concorrencia.md) | Concorrência 4, medida; o ruído da máquina era 11% |
 | [brechas-anexos-e-video-skool.md](feito/brechas-anexos-e-video-skool.md) | Anexos e vídeo hospedado no Skool |

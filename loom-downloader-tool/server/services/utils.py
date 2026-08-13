@@ -64,6 +64,37 @@ def limpar_nome_arquivo(nome):
     return nome or "sem_titulo"
 
 
+def prefixo_de_ordem(ordem, total=None):
+    """`NN - ` para a pasta refletir a ordem do curso, ou '' quando não se sabe.
+
+    No disco as pastas ordenam alfabeticamente, e aí "Dia 10" vem antes de "Dia 2".
+    Pior: MEDIDO no Skool em 12/08/2026, a PRIMEIRA aula do Dia 1 do Bootcamp é
+    "Wins do Mês 1", que alfabeticamente cai em último. O curso tem sequência
+    pedagógica e o disco a inverte.
+
+    O padding sai do TOTAL do nível, não é fixo: com 2 dígitos num módulo de 100+
+    aulas, a 100ª ordenaria antes da 20ª — o mesmo bug, um nível acima.
+
+    Sem ordem (link colado, Loom fora do Skool, curso sem `children` no JSON)
+    devolve '' — nunca inventamos posição.
+
+    Espelha `prefixoDeOrdem` em extension/content.js; os dois têm que concordar,
+    senão o servidor cria uma pasta que a extensão não reconhece.
+    """
+    try:
+        ordem = int(ordem)
+    except (TypeError, ValueError):
+        return ""
+    if ordem <= 0:
+        return ""
+
+    try:
+        largura = max(2, len(str(int(total))))
+    except (TypeError, ValueError):
+        largura = 2
+    return f"{ordem:0{largura}d} - "
+
+
 def cortar_preservando_extensao(nome_arquivo, limite=LIMITE_NOME):
     """Limpa e encurta um nome de arquivo SEM perder a extensão.
 

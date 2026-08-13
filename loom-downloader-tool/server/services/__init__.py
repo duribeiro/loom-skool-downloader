@@ -2,9 +2,11 @@
 # e facilita as importações externas.
 
 from .utils import (
-    extrair_metadados, 
-    limpar_nome_arquivo, 
-    limpar_pasta, 
+    extrair_metadados,
+    limpar_nome_arquivo,
+    cortar_preservando_extensao,
+    prefixo_de_ordem,
+    limpar_pasta,
     HEADERS
 )
 

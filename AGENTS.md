@@ -18,7 +18,7 @@ Sem git na raiz, sem monorepo, sem config compartilhada.
 
 ## O que o programa faz
 
-**Sifão v4.0** (`server/dashboard.py:293` e `:297`; a extensão carrega a mesma versão em
+**Sifão v4.2** (`server/dashboard.py:364` e `:371`; a extensão carrega a mesma versão em
 `extension/manifest.json`). Baixa aulas de comunidades do **Skool** — seja qual for onde
 o vídeo mora — mais vídeos avulsos. Uma aula pode render **três coisas**: o `.mp4`, um
 `.md` com o texto da aula e os **arquivos anexos**.
@@ -111,8 +111,22 @@ reais são `nível × 12`.
   procurava num caminho que a própria regra tinha mudado.
   `_adotar_arquivos_soltos` (`routes.py:66`) recolhe o que foi baixado no layout antigo.
   `migrar_layout.py` reorganiza o que já está em disco (**simula por padrão**).
+- **Pastas NUMERADAS na ordem do curso:** `01 - Dia 1/02 - Escolha 1 nicho/`. A ordem
+  vem da posição no array `pageProps.course.children` — MEDIDO no Skool ao vivo em
+  12/08/2026: **não existe campo de ordem** na unit nem na metadata. `ordemDasUnits`
+  (`extension/content.js`) colhe os índices; `coletarUnits` os descarta (dicionário por
+  id), por isso as duas travessias convivem.
+  Sem numeração, `Dia 10` vem antes de `Dia 2` e a PRIMEIRA aula do Dia 1 ("Wins do
+  Mês 1") cai em último.
+  **Pedido sem ordem grava sem número** — nunca inventar posição.
+- **`_pasta_existente_da_aula` (`routes.py`) é o que torna a numeração barata:** acha a
+  pasta com ou sem prefixo, então renumerar é rename, não download. Um "baixar tudo"
+  numa biblioteca pronta renumera 522 pastas sem baixar um byte. Mexer nisso sem
+  entender custa 62 GB de rebaixe.
 - **Nome de caminho tem teto:** `LIMITE_NOME = 80` (`services/utils.py`). Com pasta por
   aula o nome entra duas vezes no caminho, e o Windows corta em 260.
+  Para nome COM extensão use `cortar_preservando_extensao` — o corte cego apaga o
+  `.pdf` do anexo, e em curso como a Biblioteca de Templates o anexo é o produto.
 - **Erro guarda motivo:** `_marcar_erro` (`routes.py`) grava no item **e** em
   `logs/erros.log` (`services/registro.py`). `print` sozinho some no repaint do painel.
 - **Dedup:** pula se o `.mp4` final existe e passa de 1 MB — em **três** lugares que

@@ -41,18 +41,37 @@ ESTRUTURA = {
 _PROIBIDOS = re.compile(r'[<>:"/\\|?*]')
 
 
+def sem_prefixo_de_ordem(nome):
+    """'03 - Dia 1' -> 'Dia 1'. Só corta prefixo de DÍGITOS.
+
+    Desde a 4.2 módulos e aulas saem numerados (`01 - `) para o disco respeitar a
+    ordem do curso. ESTE SCRIPT APAGA PASTA: sem conhecer o prefixo, ele não
+    reconhecia `01 - Dia 1` como módulo válido nem `01 - Aula X` como pasta de aula,
+    classificava as duas como "intrusas", esvaziava um nível acima e chamava
+    `os.rmdir` — em HD externo, que não passa pela Lixeira.
+
+    PEGO NA REVISÃO em 12/08/2026, antes de qualquer execução.
+    """
+    prefixo, sep, resto = nome.partition(" - ")
+    return resto if sep and prefixo.isdigit() else nome
+
+
 def limpar(nome):
-    return " ".join(_PROIBIDOS.sub("", nome).split())
+    return " ".join(_PROIBIDOS.sub("", sem_prefixo_de_ordem(nome)).split())
 
 
 def eh_pasta_de_aula(caminho):
-    """Pasta de aula contém um arquivo com o mesmo nome dela (Aula X/Aula X.mp4)."""
-    nome = os.path.basename(caminho)
+    """Pasta de aula contém um arquivo com o mesmo nome dela (Aula X/Aula X.mp4).
+
+    Compara sem o prefixo de ordem dos dois lados: a pasta é `01 - Aula X` e o
+    arquivo dentro continua `Aula X.mp4`.
+    """
+    nome = sem_prefixo_de_ordem(os.path.basename(caminho))
     try:
         itens = os.listdir(caminho)
     except OSError:
         return False
-    return any(os.path.splitext(f)[0] == nome
+    return any(sem_prefixo_de_ordem(os.path.splitext(f)[0]) == nome
                for f in itens if os.path.isfile(os.path.join(caminho, f)))
 
 

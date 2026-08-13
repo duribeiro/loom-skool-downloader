@@ -317,8 +317,48 @@ render. Verificado de 40 a 200 colunas: 5 linhas em todas.
 
 ## Estado atual
 
-Fases 1, 2 e 4 **feitas**. 118 testes verdes, `node --check` OK.
-Fase 3 **simulada, não executada** (espera sinal verde).
+**FECHADO em 12/08/2026.** Todas as fases executadas, migração inclusive.
+
+### Migração aplicada (Fase 3)
+
+Autorizada pelo dono do projeto e executada com mapa salvo antes (`logs/migracao-*`):
+
+```
+ANTES  -> 885 arquivos | 63.771.816.896 bytes
+DEPOIS -> 885 arquivos | 63.771.816.896 bytes   (nada perdido)
+
+pastas-de-aula : 269 -> 522
+arquivos soltos: 277 ->   8
+```
+
+Os **20 conflitos** (arquivo presente solto no módulo E dentro da pasta da aula)
+foram comparados por **SHA-256**: os 20 idênticos byte a byte. Movidos para
+`output/_DUPLICADOS/` preservando o caminho de origem — 1,53 GB, reversível.
+Verificado um a um que a cópia boa permanece na biblioteca.
+
+### Prova de que o defeito relatado sumiu
+
+`Dia 22 / Enviar 20 mensagens de prospecção` — a aula que falhava desde o início —
+baixou com `.md` + `.mp4` (7,0 MB). `Dia 1`, apagado de propósito, voltou inteiro
+com vídeo, texto, `.zip` e `.csv`. **Log de erros vazio** na rodada completa.
+
+### Erro meu, registrado
+
+Movi arquivos com o servidor **escrevendo**. Eu tinha medido "0 escritas em 5
+minutos", mas essa medição estava com ~20 minutos de idade quando executei, e nesse
+intervalo um download foi iniciado. Deu certo por sorte estrutural (só toquei em
+cópias soltas no módulo; o servidor escrevia nas pastas das aulas), não por
+garantia. **O certo era remedir imediatamente antes de mexer.**
+
+Também escrevi um verificador que checou **zero arquivos** e mesmo assim declarou
+sucesso: filtrei por data de escrita, e `Move-Item` preserva timestamp. Validador
+que não mede nada é pior que nenhum.
+
+### O que ficou para outro plano
+
+8 anexos órfãos na Biblioteca de Templates (prefixo da aula truncado). Medido: cada
+um casa com **exatamente uma** aula. Vai junto com [[ordem-das-aulas-no-disco]],
+para não mexer duas vezes na mesma árvore.
 
 ## Próximo passo
 

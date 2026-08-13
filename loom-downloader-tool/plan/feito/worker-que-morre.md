@@ -1,7 +1,18 @@
 # Worker que morre em silêncio
 
-> **STATUS: SINTOMA CONTIDO, CAUSA DESCONHECIDA.** A falha agora aparece; falta
-> descobrir por que ela acontece.
+> **STATUS: FECHADO em 12/08/2026** — mas leia o parágrafo seguinte antes de
+> tratar como resolvido.
+>
+> O sintoma foi eliminado (`_worker_blindado`, `server/routes.py`): exceção no
+> worker vira `status='erro'`, nunca mais "baixando" eterno. E o que faltava —
+> saber **de quê** — foi fechado depois: `_marcar_erro` guarda o motivo no item do
+> painel **e** em `logs/erros.log` (`services/registro.py`), porque `print` some no
+> repaint do dashboard em ~250ms.
+>
+> **A causa raiz nunca foi reproduzida.** Na rodada completa de 12/08/2026 o log
+> saiu VAZIO — zero erros em 875 arquivos. Não é prova de que a causa sumiu; é que
+> a rede para pegá-la agora existe. Se voltar a acontecer, o motivo estará no log e
+> este plano deve ser reaberto com ele em mãos.
 
 ## O sintoma que denunciou
 

@@ -11,6 +11,7 @@ from dashboard import DASHBOARD_DATA
 from services import (
     extrair_metadados,
     limpar_nome_arquivo,
+    prefixo_de_ordem,
     limpar_pasta,
     processar_download,
     converter_final,
@@ -96,8 +97,21 @@ def _adotar_arquivos_soltos(pasta_pai_abs, pasta_aula_abs, nome_limpo):
         if not pertence:
             continue
 
+        # O PREFIXO `<Aula> - ` CAI NA ADOÇÃO.
+        #
+        # Dentro da pasta da aula ele é redundante, e mantê-lo criava duplicata: o
+        # `baixar_anexos` grava o nome NU (`template.json`), então na execução
+        # seguinte a checagem de "já existe" não encontrava `Aula X - template.json`
+        # e baixava o arquivo de novo, deixando os dois lado a lado.
+        # `migrar_layout._destino_do_arquivo` já tira o prefixo; aqui não tirava.
+        nome_destino = nome_arquivo
+        if ext.lower() not in ('.mp4', '.md'):
+            prefixo = f"{nome_limpo} - "
+            if nome_arquivo.startswith(prefixo):
+                nome_destino = nome_arquivo[len(prefixo):]
+
         os.makedirs(pasta_aula_abs, exist_ok=True)
-        destino = os.path.join(pasta_aula_abs, nome_arquivo)
+        destino = os.path.join(pasta_aula_abs, nome_destino)
         if os.path.exists(destino):
             continue          # já existe no lugar novo: não sobrescreve nada
         try:
@@ -109,6 +123,119 @@ def _adotar_arquivos_soltos(pasta_pai_abs, pasta_aula_abs, nome_limpo):
     if movidos:
         print(f"📁 {movidos} arquivo(s) já baixado(s) movido(s) para a pasta de '{nome_limpo}'")
     return movidos
+
+
+def _pasta_existente_da_aula(pasta_pai_abs, nome_limpo):
+    """Acha a pasta desta aula mesmo que ela tenha PREFIXO DE ORDEM.
+
+    `Modulo/07 - Aula X/` é a pasta de "Aula X". Sem isto, numerar as pastas para
+    respeitar a ordem do curso faria o servidor não achar nada e REBAIXAR a
+    biblioteca inteira — 522 aulas, 62 GB medidos em 12/08/2026.
+
+    É esta função que torna a numeração barata: se o curso for reordenado no Skool,
+    renumerar vira um rename local, sem custo de download.
+
+    O prefixo aceito é ESTRITO — só dígitos seguidos de " - ". Uma aula de verdade
+    chamada "Bônus - Aula X" não pode ser confundida com a numeração.
+
+    Devolve o nome real da pasta, ou None.
+    """
+    if not os.path.isdir(pasta_pai_abs):
+        return None
+
+    try:
+        nomes = os.listdir(pasta_pai_abs)
+    except OSError:
+        return None
+
+    candidatos = []
+    for nome in nomes:
+        if not os.path.isdir(os.path.join(pasta_pai_abs, nome)):
+            continue
+        if nome == nome_limpo:
+            return nome                      # sem prefixo: casa exato, decide na hora
+        if nome.endswith(f" - {nome_limpo}"):
+            prefixo = nome[:-len(f" - {nome_limpo}")]
+            if prefixo.isdigit():
+                candidatos.append(nome)
+
+    # Mais de um número para a mesma aula é estado inconsistente (renumeração pela
+    # metade). Escolher um seria esconder o problema; o menor é o determinístico.
+    if len(candidatos) > 1:
+        print(f"⚠️  '{nome_limpo}' tem {len(candidatos)} pastas numeradas: {sorted(candidatos)}")
+    return sorted(candidatos)[0] if candidatos else None
+
+
+def _sem_prefixo_de_ordem(nome):
+    """'03 - Aula X' -> 'Aula X'. Só corta prefixo de DÍGITOS."""
+    prefixo, sep, resto = nome.partition(" - ")
+    return resto if sep and prefixo.isdigit() else nome
+
+
+def _resolver_componente(pasta_pai_abs, nome_desejado):
+    """Resolve UM componente do caminho, reaproveitando a pasta que já existe.
+
+    Devolve o nome a usar. Se existir uma pasta equivalente (mesmo nome, com ou sem
+    prefixo de ordem) e o número mudou, RENOMEIA em vez de criar outra.
+    """
+    nome_base = _sem_prefixo_de_ordem(nome_desejado)
+    existente = _pasta_existente_da_aula(pasta_pai_abs, nome_base)
+
+    if not existente:
+        return nome_desejado
+    if existente == nome_desejado:
+        return existente
+    if nome_desejado == nome_base:
+        # O pedido veio SEM ordem; a pasta numerada em disco continua valendo.
+        return existente
+    return _renomear_pasta_da_aula(pasta_pai_abs, existente, nome_desejado)
+
+
+def _resolver_caminho(pasta_relativa):
+    """Aplica `_resolver_componente` a CADA nível do caminho, de cima para baixo.
+
+    ISTO É O QUE IMPEDE O REBAIXE DE 62 GB. Quem numera o módulo é a EXTENSÃO
+    (`caminhoDaAula`), então o pedido chega com `Comunidade/Curso/01 - Dia 1`. Se
+    olhássemos só a pasta da AULA — como fazia a primeira versão desta mudança —,
+    o módulo `01 - Dia 1` não existiria em disco, uma árvore numerada inteira
+    nasceria ao lado da antiga e TODAS as aulas seriam rebaixadas.
+
+    PEGO NA REVISÃO em 12/08/2026, e medido: com `Com/Curso/Dia 1/Aula 1/` em disco,
+    um pedido para `Com/Curso/01 - Dia 1` resolvia para `01 - Dia 1/01 - Aula 1` —
+    caminho inexistente. Exatamente a falha que a trava existia para evitar, um
+    nível acima de onde ela olhava.
+    """
+    partes = [p for p in pasta_relativa.replace('\\', '/').split('/') if p]
+    resolvido = []
+    for parte in partes:
+        pai_abs = os.path.join(PASTA_OUTPUT, *resolvido) if resolvido else PASTA_OUTPUT
+        resolvido.append(_resolver_componente(pai_abs, parte))
+    return os.path.join(*resolvido) if resolvido else pasta_relativa
+
+
+def _renomear_pasta_da_aula(pasta_pai_abs, nome_atual, nome_desejado):
+    """Renomeia a pasta da aula para a numeração nova. Devolve o nome em uso.
+
+    NUNCA sobrescreve: se o destino já existe, mantém o nome atual. Duas pastas
+    disputando o mesmo número é estado inconsistente, e mesclá-las aqui — no meio de
+    um download, sem o usuário ver — poderia enterrar arquivo.
+
+    Falha de rename não é fatal: a pasta antiga continua servindo (a aula é
+    encontrada por `_pasta_existente_da_aula` de qualquer jeito). Perder a
+    numeração é chato; perder o download seria pior.
+    """
+    destino = os.path.join(pasta_pai_abs, nome_desejado)
+    if os.path.exists(destino):
+        print(f"⚠️  Não renomeei '{nome_atual}': '{nome_desejado}' já existe.")
+        return nome_atual
+
+    try:
+        os.rename(os.path.join(pasta_pai_abs, nome_atual), destino)
+        print(f"🔢 '{nome_atual}' → '{nome_desejado}'")
+        return nome_desejado
+    except OSError as erro:
+        print(f"⚠️  Não consegui renomear '{nome_atual}': {erro}")
+        return nome_atual
 
 
 def _marcar_erro(item_dashboard, nome, pasta, motivo):
@@ -126,7 +253,8 @@ def _marcar_erro(item_dashboard, nome, pasta, motivo):
 
 
 def _worker_blindado(url, pasta_destino, nome_arquivo_sugerido, item_dashboard,
-                     desc=None, resources=None, referer=None, anexos=None):
+                     desc=None, resources=None, referer=None, anexos=None,
+                     ordem=None, ordem_total=None):
     """Roda `worker_download` sem deixar exceção nenhuma sumir.
 
     O `ThreadPoolExecutor` guarda a exceção no `Future` e só a mostra quando
@@ -141,7 +269,7 @@ def _worker_blindado(url, pasta_destino, nome_arquivo_sugerido, item_dashboard,
     """
     try:
         worker_download(url, pasta_destino, nome_arquivo_sugerido, item_dashboard,
-                        desc, resources, referer, anexos)
+                        desc, resources, referer, anexos, ordem, ordem_total)
     except BaseException as erro:
         nome = item_dashboard.get('nome') or nome_arquivo_sugerido or '?'
         # A pasta sai do ITEM, não do parâmetro: `worker_download` rebinda
@@ -157,7 +285,8 @@ def _worker_blindado(url, pasta_destino, nome_arquivo_sugerido, item_dashboard,
 # --- 1. A LÓGICA DO TRABALHADOR (WORKER) ---
 # Esta função roda em "segundo plano" (background) para não travar o servidor.
 def worker_download(url, pasta_destino, nome_arquivo_sugerido, item_dashboard,
-                    desc=None, resources=None, referer=None, anexos=None):
+                    desc=None, resources=None, referer=None, anexos=None,
+                    ordem=None, ordem_total=None):
     """
     Executa o ciclo completo de vida de uma aula:
     Preparar -> (baixar vídeo) -> (converter) -> (gravar texto) -> Limpar
@@ -227,12 +356,46 @@ def worker_download(url, pasta_destino, nome_arquivo_sugerido, item_dashboard,
     #
     # Com pasta sempre, o caminho é idempotente e a pergunta "já baixei?" tem um lugar
     # só. Custo aceito: um clique a mais para chegar num vídeo de aula que só tem vídeo.
-    pasta_pai = pasta_destino
-    pasta_destino = os.path.join(pasta_destino, nome_limpo)
+    # O CAMINHO INTEIRO é resolvido contra o que já existe — MÓDULO INCLUSIVE, não
+    # só a aula. Quem numera o módulo é a EXTENSÃO (`caminhoDaAula`), então o pedido
+    # chega como `Comunidade/Curso/01 - Dia 1`.
+    #
+    # PEGO NA REVISÃO em 12/08/2026: a primeira versão desta mudança olhava só a
+    # pasta da AULA. Medido — com `Com/Curso/Dia 1/Aula 1/` em disco, um pedido para
+    # `Com/Curso/01 - Dia 1` resolvia para `01 - Dia 1/01 - Aula 1`, caminho que não
+    # existe: a árvore numerada inteira nasceria ao lado da antiga e TODAS as aulas
+    # seriam rebaixadas. Exatamente a falha que a trava existia para evitar, um nível
+    # acima de onde ela olhava.
+    pasta_pai = _resolver_caminho(
+        pasta_destino[1:] if pasta_destino.startswith(os.sep) else pasta_destino)
+    pasta_pai_limpa = pasta_pai
+
+    # Onde o número muda, a pasta é RENOMEADA em vez de duplicada. Assim um "baixar
+    # tudo" — que pula tudo o que já existe — vira uma RENUMERAÇÃO COMPLETA sem
+    # baixar um byte, e uma reordenação no Skool reordena o disco de graça.
+    pasta_pai_abs = os.path.join(PASTA_OUTPUT, pasta_pai_limpa)
+    nome_desejado = prefixo_de_ordem(ordem, ordem_total) + nome_limpo
+    nome_da_pasta = _pasta_existente_da_aula(pasta_pai_abs, nome_limpo)
+
+    if not nome_da_pasta:
+        nome_da_pasta = nome_desejado
+    elif nome_da_pasta != nome_desejado and prefixo_de_ordem(ordem, ordem_total):
+        # RENOMEIA em vez de baixar de novo.
+        #
+        # Sem isto a numeração só valeria para download NOVO: as 522 pastas já em
+        # disco (medido em 12/08/2026) ficariam para sempre sem número, e a ordem do
+        # curso nunca chegaria ao disco.
+        #
+        # Com isto, um "baixar tudo" — que pula tudo o que já existe — vira uma
+        # RENUMERAÇÃO COMPLETA sem baixar um byte. E quando o curso for reordenado no
+        # Skool, o mesmo caminho reordena o disco de graça.
+        nome_da_pasta = _renomear_pasta_da_aula(pasta_pai_abs, nome_da_pasta,
+                                                nome_desejado)
+
+    pasta_destino = os.path.join(pasta_pai, nome_da_pasta)
     item_dashboard['folder'] = pasta_destino
 
     # Recolhe o que já estava solto de execuções anteriores, para não rebaixar.
-    pasta_pai_limpa = pasta_pai[1:] if pasta_pai.startswith(os.sep) else pasta_pai
     pasta_aula_limpa = pasta_destino[1:] if pasta_destino.startswith(os.sep) else pasta_destino
     _adotar_arquivos_soltos(os.path.join(PASTA_OUTPUT, pasta_pai_limpa),
                             os.path.join(PASTA_OUTPUT, pasta_aula_limpa),
@@ -261,9 +424,22 @@ def worker_download(url, pasta_destino, nome_arquivo_sugerido, item_dashboard,
         # impressão de travamento. `max` porque barra que anda para trás parece
         # trabalho perdido.
         if percentual is not None:
-            item_dashboard['total'] = 100
-            item_dashboard['progresso'] = max(item_dashboard.get('progresso', 0),
-                                              min(100, int(percentual)))
+            novo = max(0, min(100, int(percentual)))
+            if item_dashboard.get('total') != 100:
+                # TROCA DE UNIDADE: até aqui `progresso` contava SEGMENTOS (o caminho
+                # HLS do Loom conta de 0 a N, com `total` = N). Comparar isso com um
+                # percentual é somar laranja com maçã.
+                #
+                # MEDIDO em 12/08/2026: num vídeo de 300 segmentos, `progresso`
+                # chegava a 300 e o `max(300, 85)` congelava a barra em 100% durante
+                # TODA a conversão — que é a queixa original ("fica travada em 100% e
+                # não avança"). A faixa 85→99 do ffmpeg nunca chegou a valer no
+                # caminho do Loom, mesmo depois de ela ter sido dada como pronta.
+                item_dashboard['total'] = 100
+                item_dashboard['progresso'] = novo
+            else:
+                item_dashboard['progresso'] = max(item_dashboard.get('progresso', 0),
+                                                  novo)
         elif total:
             # Total novo = FAIXA nova. O yt-dlp baixa vídeo e áudio como downloads
             # separados e reporta o total uma vez por faixa; sem zerar o progresso
@@ -440,7 +616,12 @@ def rota_receber_pedido():
         dados_request.get('desc'),
         dados_request.get('resources'),
         dados_request.get('referer'),
-        dados_request.get('anexos')
+        dados_request.get('anexos'),
+        # Posição da aula no módulo, para a pasta refletir a ordem do curso em vez
+        # da alfabética. Ausente = pedido sem ordem conhecida (link colado, Loom
+        # avulso): grava sem número, nunca inventa posição.
+        dados_request.get('ordem'),
+        dados_request.get('ordemTotal')
     )
 
     return jsonify({"status": "ok", "mensagem": "Adicionado à fila"})
