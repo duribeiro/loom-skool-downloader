@@ -37,7 +37,7 @@ Baixador de aulas hospedadas em comunidades do **Skool** — seja qual for onde 
 - **📚 Curso inteiro pelo popup** — na classroom do Skool, o popup detecta o curso da aba e enfileira **todas as aulas** de uma vez (vídeo + texto + anexos), respeitando a estrutura de módulos.
 - **🏘️ Comunidade inteira** — na listagem `/{grupo}/classroom`, o popup lista os cursos, mostra o total de aulas na hora e enfileira tudo com **confirmação em dois passos**. Cursos sem acesso são pulados e reportados.
 - **🎥 5 fontes** — Skool/Loom (HLS próprio), **vídeo hospedado no Skool** (Mux, via `yt-dlp`), YouTube e Vimeo (`yt-dlp`), incluindo **Vimeo privado** do Skool (via `Referer`) e **Loom direto** (`loom.com/share`).
-- **📝 Texto e anexos da aula** — a descrição e os recursos viram um `.md` em Markdown (links, listas, negrito); os arquivos anexos (`file_id` do Skool) são baixados de verdade. Aula sem vídeo não é omitida: vira `.md`.
+- **📝 Texto, imagens e anexos da aula** — a descrição e os recursos viram um `.md` em Markdown (links, listas, negrito); os arquivos anexos (`file_id` do Skool) são baixados de verdade. **As imagens do corpo da aula também são baixadas** e o Markdown aponta para o arquivo local — o texto continua completo offline, mesmo se o Skool tirar a imagem do ar. Aula sem vídeo não é omitida: vira `.md`.
 - **📁 Uma pasta por aula, sempre** — com 1 arquivo ou com 5. O lugar é função da **identidade** da aula; o conteúdo só decide quais arquivos existem, nunca onde ficam.
 - **🔢 Na ordem do curso, não na alfabética** — as pastas saem numeradas (`01 - `, `02 - `) seguindo a sequência do Skool. Sem isso, `Dia 10` vem antes de `Dia 2` e a primeira aula do módulo cai em último. Renumerar **não custa download**: mandar baixar de novo uma biblioteca pronta só renomeia.
 - **📁 YouTube por canal** — vídeos do YouTube **colados no popup** caem em `output/YouTube/<Canal>/`. Aula do Skool cujo vídeo mora no YouTube **não** ganha esse nível — ela segue a estrutura do curso.
@@ -225,7 +225,7 @@ São **dois tipos de teste** com propósitos diferentes:
 
 | | O que protege | Quando roda |
 |---|---|---|
-| **Suíte padrão** | Contra **nós** quebrarmos o código | Sempre. Fixtures congeladas, sem internet |
+| **Suíte padrão** | Contra **nós** quebrarmos o código | Sempre. **189 testes**, fixtures congeladas, sem internet |
 | **`-m rede`** | Contra o **Loom** mudar a página | Sob demanda. Precisa de internet |
 
 Uma fixture congelada fica verde para sempre mesmo se o Loom mudar o formato da página — projeto quebrado, suíte passando. **Se um teste `-m rede` falhar, não é bug — é manutenção:** o Loom mudou algo. Baixe o HTML novo e atualize a extração junto com a fixture em `tests/fixtures/loom_embed.html`.

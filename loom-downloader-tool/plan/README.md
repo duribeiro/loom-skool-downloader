@@ -20,8 +20,7 @@ explícita.
 | Documento | Assunto |
 |---|---|
 | [aplicativo-instalavel.md](a-fazer/aplicativo-instalavel.md) | **Próximo grande passo.** `.exe` único, sem terminal, interface estilo IDM e pasta de saída configurável |
-| [ordem-das-aulas-no-disco.md](a-fazer/ordem-das-aulas-no-disco.md) | Numeração das pastas — código pronto e validado; falta só a limpeza da `Dia 3` órfã |
-| [limpeza-orfaos-ytdlp.md](a-fazer/limpeza-orfaos-ytdlp.md) | ~1 GB de `._yt_*` órfãos de reinícios de servidor |
+| [limpeza-orfaos-ytdlp.md](a-fazer/limpeza-orfaos-ytdlp.md) | `._yt_*` órfãos de reinícios de servidor — restaram 2 arquivos (~350 MB), já na quarentena |
 | [outras-comunidades.md](a-fazer/outras-comunidades.md) | Pastas de canal do YouTube nas 4 comunidades não medidas |
 | [extensao-standalone.md](a-fazer/extensao-standalone.md) | *(supersedido)* levantamento da extensão sem Python, descartado |
 
@@ -29,6 +28,7 @@ explícita.
 
 | Documento | Assunto |
 |---|---|
+| [ordem-das-aulas-no-disco.md](feito/ordem-das-aulas-no-disco.md) | Pastas numeradas na ordem do curso, sem custo de download. Corrida entre workers e título terminado em ponto |
 | [pasta-sempre-e-caminho-unico.md](feito/pasta-sempre-e-caminho-unico.md) | Toda aula ganha pasta; um caminho só para os três botões. Migração de 249 arquivos, sem perda |
 | [barra-de-progresso.md](feito/barra-de-progresso.md) | Barra em faixas por etapa; progresso REAL do ffmpeg via `-progress pipe:1` |
 | [worker-que-morre.md](feito/worker-que-morre.md) | Worker que estourava virava "baixando" eterno; hoje vira erro COM motivo em disco |

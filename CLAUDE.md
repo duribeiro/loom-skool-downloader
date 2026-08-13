@@ -2,12 +2,21 @@
 
 Orientações para o Claude Code (claude.ai/code) trabalhar neste repositório.
 
-> **Números de linha conferidos em 11/08/2026** (branch `Dev`). Se o código mudou,
-> confirme antes de citar — este arquivo já esteve errado por não fazer isso.
+> **Fatos conferidos em 13/08/2026** (branch `Dev`).
+>
+> **Número de linha aqui é dica, não endereço — sempre confirme por `grep` antes de
+> citar.** MEDIDO: entre 11 e 13/08/2026, quatro commits invalidaram ~40 citações.
+> `routes.py` foi de ~280 para ~700 linhas e `content.js` de ~1080 para ~1530, então
+> qualquer número desses dois arquivos envelhece a cada commit. Uma auditoria feita
+> em 13/08 teve os próprios números vencidos **enquanto rodava**.
+>
+> Por isso as âncoras deste arquivo são **nomes de função**, que são estáveis e
+> greppáveis. Os arquivos que quase não mudam (`app.py`, `caminhos.py`,
+> `downloader.py`, `skool.py`, `popup.js`) mantêm linha.
 
 ## O que é
 
-**Sifão** (nome do programa, `dashboard.py:364`; versão `4.2`, `dashboard.py:371`).
+**Sifão** (nome do programa, `dashboard.py`; versão `4.2`, `VERSAO` em `dashboard.py`).
 Baixador de aulas de comunidades do **Skool**, mais vídeos avulsos de YouTube, Vimeo
 e Loom. Arquitetura **híbrida**: uma extensão Chrome injeta um botão (pill) no player
 — ou enfileira um curso/comunidade inteira pelo popup — e dispara pedidos para um
@@ -27,12 +36,12 @@ vídeo mora num **post fixado** — campo `videoIds` (PLURAL) em
 `pinnedPosts[].post.metadata`. MEDIDO em 12/08/2026: **52 das 280 aulas** da
 ai-makers são assim (37 de 85 em "Office Hours com Well Pires", 12 de 20 em
 "Founders Talk"), e todas eram perdidas em silêncio — viravam só um `.md`
-placeholder. Resolvido por `resolverVideoDePostFixado` (`extension/content.js:411`).
-As armadilhas estão em `plan/feito/video-em-post-fixado.md (índice de tudo em `plan/README.md`)`; vale ler antes de mexer no
+placeholder. Resolvido por `resolverVideoDePostFixado` (`extension/content.js`).
+As armadilhas estão em [`plan/feito/video-em-post-fixado.md`](loom-downloader-tool/plan/feito/video-em-post-fixado.md) (índice em [`plan/README.md`](loom-downloader-tool/plan/README.md)); vale ler antes de mexer no
 enfileiramento.
 
 Além do vídeo, uma aula pode render um **`.md`** (descrição + recursos do Skool,
-`services/texto.py`) e **anexos** (`baixar_anexos`, `services/skool.py:117`).
+`services/texto.py`) e **anexos** (`baixar_anexos`, `services/skool.py`).
 
 Existe um projeto irmão em `../loom-dl-extension`: uma extensão **standalone** (sem
 Python, sem FFmpeg) que resolve o mesmo problema de forma portátil. Este repo aqui é
@@ -57,7 +66,7 @@ precisa estar no `sys.path` — o que o Python faz automaticamente ao executar
 quase sempre isso — ou a porta ocupada: `porta_ocupada()` (`app.py:39`) recusa subir
 um segundo servidor, para você não ficar com o processo ANTIGO atendendo os cliques.
 
-Concorrência ajustável sem editar código (`routes.py:42-45`):
+Concorrência ajustável sem editar código (`_SIMULTANEOS` em `routes.py`):
 
 ```bash
 SIFAO_DOWNLOADS_SIMULTANEOS=6 python server/app.py    # padrão: 4
@@ -73,9 +82,9 @@ selecionar `loom-downloader-tool/extension`.
 Vale seguir esse trace antes de mexer em qualquer coisa:
 
 1. **Entrada.** Quatro portas, todas terminando no mesmo `POST http://localhost:5000/baixar`:
-   - pill sobre o iframe do Loom — `criarBotaoDownload` (`extension/content.js:775`, POST em `:798`);
-   - pill do Vimeo (`content.js:910`), do Loom nativo (`content.js:976`) e do vídeo do
-     Skool (`content.js:1066`, que resolve `playbackId`+token **no clique** porque o token expira);
+   - pill sobre o iframe do Loom — `criarBotaoDownload` (`extension/content.js`);
+   - pill do Vimeo (`criarBotaoVimeo`), do Loom nativo (`criarBotaoLoomNativo`) e do
+     vídeo do Skool (`criarBotaoVideoSkool`, que resolve `playbackId`+token **no clique** porque o token expira);
    - popup: curso inteiro / comunidade inteira (`extension/popup.js:71` e `:128`), que
      manda a execução para o content script — ela sobrevive ao popup fechar;
    - popup: link colado (`popup.js:185`), aceitando YouTube, Loom e Vimeo.
@@ -84,17 +93,18 @@ Vale seguir esse trace antes de mexer em qualquer coisa:
    de `obterDadosDaPagina()` (`content.js:15`), que parseia o `document.title` do Skool
    pelo ponto médio `·` para separar comunidade / curso / aula.
 
-2. `server/routes.py:278` `rota_receber_pedido` — anexa um dict em `DASHBOARD_DATA` e
+2. `rota_receber_pedido` (`server/routes.py`) — anexa um dict em `DASHBOARD_DATA` e
    responde `200` **imediatamente**, sem esperar o download. Aceita
-   `{url, folder, filename, desc, resources, referer, anexos}` (todos além dos três
-   primeiros são opcionais). `url` vazia é caso válido: aula só de texto.
+   `{url, folder, filename, ordem, ordemTotal, desc, resources, referer, anexos}`
+   (todos além dos três primeiros são opcionais). `url` vazia é caso válido: aula só
+   de texto; `ordem` ausente significa "não sei a posição" e a pasta sai sem número.
 
-3. `server/routes.py:47` — `ThreadPoolExecutor(max_workers=_SIMULTANEOS)` (padrão 4)
-   executa `worker_download` (`routes.py:105`) em background; o resto fica na fila.
+3. `ThreadPoolExecutor(max_workers=_SIMULTANEOS)` (padrão 4, em `server/routes.py`)
+   executa `worker_download` em background; o resto fica na fila.
 
 4. `worker_download`, na ordem em que as coisas acontecem:
-   - resolve o nome quando o pedido veio sem ele, roteando por origem (`routes.py:124-136`);
-   - YouTube **de link colado** ganha subpasta de canal (`routes.py:153`) — e **só**
+   - resolve o nome quando o pedido veio sem ele, roteando por origem;
+   - YouTube **de link colado** ganha subpasta de canal — e **só**
      nesse caso; ver o comentário longo ali, é uma regressão já vivida;
    - dá à aula uma **pasta própria, sempre** — com 1 arquivo ou com 5, e **numerada na
      ordem do curso** (`01 - `, `02 - `). O lugar é função da **identidade** da aula; o
@@ -105,15 +115,20 @@ Vale seguir esse trace antes de mexer em qualquer coisa:
      caminho ao conteúdo do pedido: com `desc` a aula ganhava pasta, sem `desc` o arquivo
      ficava solto. Medido no uso real: o "já baixei?" procurava o `.mp4` num caminho que a
      própria regra tinha mudado, e um curso inteiro foi rebaixado com os vídeos soltos ao
-     lado das pastas antigas. `_adotar_arquivos_soltos` (`routes.py:66`) recolhe o que já
+     lado das pastas antigas. `_adotar_arquivos_soltos` recolhe o que já
      havia sido baixado no layout antigo, para não rebaixar;
-   - grava o `.md` (`routes.py:195`) e baixa os **anexos** (`routes.py:208`) **antes** do
-     vídeo — em curso onde o anexo é o produto, ele não pode depender do vídeo dar certo;
-   - roteia o vídeo (`routes.py:231-265`).
+   - grava o `.md`, baixa os **anexos** e baixa as **imagens do corpo da aula** —
+     tudo **antes** do vídeo, porque em curso onde o anexo é o produto ele não pode
+     depender do vídeo dar certo;
+   - as imagens vêm de `imagens_do_desc` (`services/texto.py`), que devolve a MESMA
+     forma dos anexos (`{url, nome}`) e por isso reaproveita `baixar_anexos`. O nome
+     do arquivo sai de `nome_local_da_imagem` nas **duas** pontas — a referência no
+     Markdown e o download —; se divergirem, o `.md` aponta para arquivo inexistente;
+   - roteia o vídeo por origem (YouTube / Vimeo / Skool / Loom).
 
-5. **Caminho Loom (HLS próprio):** `services/utils.py:143` `extrair_metadados` lê o
+5. **Caminho Loom (HLS próprio):** `extrair_metadados` (`services/utils.py`) lê o
    `window.__APOLLO_STATE__` da página de embed (estrutura, não regex — ver o comentário
-   em `utils.py:42-50`; o regex sobrevive só como último recurso em `utils.py:131`).
+   longo ali; o regex sobrevive só como último recurso, em `_url_por_regex`).
    Depois `services/downloader.py:207` `processar_download`:
    - pula tudo se o `.mp4` final já existir com mais de 1 MB (`downloader.py:224`);
    - baixa o master com `_baixar_texto` (`downloader.py:179`) — com timeout e retry;
@@ -124,15 +139,15 @@ Vale seguir esse trace antes de mexer em qualquer coisa:
    - conta quantos segmentos falharam e avisa (`downloader.py:302-306`);
    - grava `master.m3u8` + as playlists locais em `hls-temp/` para o FFmpeg ler depois.
 
-6. `services/converter.py:7` `converter_final` — FFmpeg com `-c copy` (sem re-encode)
+6. `converter_final` (`services/converter.py`) — FFmpeg com `-c copy` (sem re-encode)
    gravando em `temp_convertido.mp4` dentro da pasta temp, depois `shutil.move` para o
    destino final. O nome curto na temp é proposital: evita estourar o limite de caminho
    do Windows.
 
-7. `services/utils.py:31` `limpar_pasta` — apaga `hls-temp/`.
+7. `limpar_pasta` (`services/utils.py`) — apaga `hls-temp/`.
 
 **Caminho yt-dlp (YouTube / Vimeo / Skool):** não passa por 5-7. `baixar_com_ytdlp`
-(`services/ytdlp.py:108`) grava direto o `.mp4` final, com nome temporário
+(`services/ytdlp.py`) grava direto o `.mp4` final, com nome temporário
 `._yt_<uuid>` + rename (blindagem contra `%` no título e contra colisão entre
 downloads simultâneos). O vídeo do Skool ainda passa por `_diagnosticar`
 (`services/skool.py:55`) antes, para distinguir "token expirado" de erro genérico.
@@ -149,16 +164,26 @@ downloads simultâneos). O vídeo do Skool ainda passa por `_diagnosticar`
   rodar de `loom-downloader-tool/`. O cálculo já foi duplicado em `downloader.py` e
   `converter.py`; **não duplique de novo** — importe de `.caminhos`.
 - **Comentário explica o porquê, não o quê.** O padrão da casa é registrar a medição e
-  a regressão que motivaram a decisão (veja `services/skool.py:1-23` ou
-  `routes.py:142-152`). Ao mexer, preserve esses blocos; eles são a memória do projeto.
+  a regressão que motivaram a decisão (veja `services/skool.py:1-23`, o bloco sobre a
+  subpasta de canal do YouTube dentro de `worker_download`, ou a docstring de
+  `_equivalentes`). Ao mexer, preserve esses blocos; eles são a memória do projeto.
 
 ### Reutilizar antes de criar
 
-- `limpar_nome_arquivo` (`services/utils.py:15`) — para qualquer nome de arquivo ou
-  pasta. Faz `html.unescape` e remove `< > : " / \ | ? *`.
+- `limpar_nome_arquivo(nome, limite=None)` (`services/utils.py`) — para qualquer nome
+  de arquivo ou pasta. Faz `html.unescape`, remove `< > : " / \ | ? *` e **corta ponto
+  e espaço do fim**: sem isso o Windows corta o ponto (calado) e o yt-dlp o troca por
+  `#`, gerando três nomes para a mesma coisa. Foi assim que 349,8 MB ficaram órfãos.
+- `limite_do_nome(pasta_pai)` (`services/utils.py`) — o teto do CAMINHO INTEIRO, não do
+  componente. `LIMITE_NOME = 80` é só legibilidade; quem garante que cabe nos 260 do
+  Windows é esta função, que sabe que o nome da aula entra **duas vezes** no caminho
+  (pasta + arquivo). Piso `PISO_NOME = 25`; abaixo disso o servidor avisa que a pasta
+  de destino é funda demais.
+- `cortar_preservando_extensao` (`services/utils.py`) — para nome COM extensão (anexo,
+  imagem). `limpar_nome_arquivo` corta cego e apagaria o `.pdf`.
 - `HEADERS` (`services/utils.py:9`) — em **toda** requisição ao Loom. O `Referer`/`Origin`
   são necessários para não levar bloqueio.
-- `limpar_pasta` (`services/utils.py:31`) — remoção recursiva tolerante a erro.
+- `limpar_pasta` (`services/utils.py`) — remoção recursiva tolerante a erro.
 - `_baixar_texto` / `_baixar_segmento` (`services/downloader.py:179` e `:126`) — **toda**
   requisição nova no caminho HLS passa por uma delas. Elas carregam a política de
   timeout + retry; um `requests.get` cru volta a ter o bug que elas resolvem.
@@ -188,11 +213,18 @@ downloads simultâneos). O vídeo do Skool ainda passa por `_diagnosticar`
 
 ### Estado compartilhado
 
-`DASHBOARD_DATA` (`server/dashboard.py:15`) é uma lista global mutada pelas threads de
-download e lida 4×/s pela thread do Rich (`_loop_visual`, `dashboard.py:396`).
+`DASHBOARD_DATA` (`server/dashboard.py`) é uma lista global mutada pelas threads de
+download e lida 4×/s pela thread do Rich (`_loop_visual`).
 **Não há lock.** Apenas anexe itens ou mute campos de um dict existente; nunca reordene
 nem remova elementos com o dashboard rodando. A thread de desenho se protege tirando um
-snapshot por quadro (`_instantaneo`, `dashboard.py:26`) — mantenha isso.
+snapshot por quadro (`_instantaneo`) — mantenha isso.
+
+**`_TRAVA_CAMINHO` (`server/routes.py`) — não remova, e não tire o `makedirs` de
+dentro dela.** Resolver o caminho é ler → decidir → renomear, e isso não é atômico.
+MEDIDO em 13/08/2026: duas aulas do mesmo módulo caíram na mesma janela; o worker A
+renomeou `Dia 3` → `03 - Dia 3` e o worker B, que já tinha lido o nome antigo,
+recriou a pasta com `makedirs` e rebaixou 89,84 MB que já existiam (hash idêntico).
+Sobraram as duas pastas, e o servidor passou a gravar sempre na errada.
 
 O dashboard também **ocupa a tela inteira** (`Live(..., screen=True)`, `dashboard.py:405`)
 e repinta 4×/s. Consequência prática: qualquer `print()` vindo de uma thread de download
@@ -255,12 +287,16 @@ python -m pytest            # rápido, fixtures congeladas, sem internet
 python -m pytest -m rede    # bate no Loom de verdade
 ```
 
-`tests/` cobre extração, nomes, parser de playlist, texto, worker, youtube e vimeo.
+**189 testes** (13/08/2026) em 11 arquivos: extração, nomes, parser de playlist, texto,
+worker, dashboard, migração, registro de erros, versão, youtube e vimeo. Os 4
+`deselected` são os `-m rede`, por desenho.
+
 Um teste `-m rede` falhando **não é bug do código** — é o Loom tendo mudado a página;
 atualize a extração junto com a fixture `tests/fixtures/loom_embed.html`.
 
 ## Não commitar
 
-`output/` guarda os vídeos baixados (**917 arquivos, ~46 GB** em 11/08/2026) e já está no
+`output/` guarda os vídeos baixados (**1015 arquivos, 63 GB** em 13/08/2026, incluindo
+a quarentena `_DUPLICADOS/`) e já está no
 `.gitignore`, junto com `hls-temp/`, `venv/`, `__pycache__/` e `*.stackdump`. Confira
 antes de qualquer `git add -A`.

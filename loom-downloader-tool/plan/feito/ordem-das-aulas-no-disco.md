@@ -351,6 +351,22 @@ não renomeia"*.
 estado partido, em vez de escolher calado. Pedido sem ordem também passa a usar a
 numerada — devolver a antiga era o que fazia o pill ressuscitar a pasta velha.
 
+## FECHADO em 13/08/2026
+
+Validado pelo dono do projeto: pill renomeou, curso inteiro renomeou **sem baixar um
+byte**, e a limpeza foi aplicada com total conservado (1002 = 1002). No disco:
+`01 - Dia 1` … `30 - Dia 30`, e a `Dia 3` órfã foi para a quarentena.
+
+Dois defeitos apareceram só no uso real, depois da revisão de código — estão
+registrados abaixo, e são o motivo de este documento valer a leitura:
+
+- **corrida entre workers** partia a pasta do módulo (`d059f12`);
+- **título terminado em ponto** gerava três nomes para a mesma coisa e deixava
+  349,8 MB órfãos (`c75be6d`).
+
+Nenhum dos dois foi pego pela revisão de código nem pelos testes: concorrência real
+e normalização de nome pelo sistema de arquivos só aparecem rodando de verdade.
+
 ## Estado atual
 
 Fases 1, 2 e 3 **feitas**; **156 testes verdes**, `node --check` OK.
