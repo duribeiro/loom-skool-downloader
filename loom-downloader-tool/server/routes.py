@@ -13,6 +13,8 @@ from services import (
     extrair_metadados,
     limpar_nome_arquivo,
     prefixo_de_ordem,
+    limite_do_nome,
+    PISO_NOME,
     limpar_pasta,
     processar_download,
     converter_final,
@@ -427,7 +429,27 @@ def worker_download(url, pasta_destino, nome_arquivo_sugerido, item_dashboard,
         # "baixar tudo" — que pula tudo o que já existe — vira uma RENUMERAÇÃO
         # COMPLETA sem baixar um byte, e uma reordenação no Skool sai de graça.
         pasta_pai_abs = os.path.join(PASTA_OUTPUT, pasta_pai_limpa)
-        nome_desejado = prefixo_de_ordem(ordem, ordem_total) + nome_limpo
+        prefixo = prefixo_de_ordem(ordem, ordem_total)
+
+        # ORÇAMENTO DO CAMINHO INTEIRO, agora que a pasta-pai é conhecida.
+        #
+        # `LIMITE_NOME` é teto por COMPONENTE; o limite do Windows é do caminho
+        # inteiro. MEDIDO em 13/08/2026: com a `output/` dentro do projeto (82 chars
+        # só de prefixo), o pior caso deu 277 mesmo com o nome já em 80 — e aí o
+        # `Get-ChildItem` do PowerShell reporta a pasta como VAZIA, escondendo 1,1 GB.
+        #
+        # Aqui o nome encolhe só o quanto for preciso. Com a `output/` num lugar
+        # normal (Vídeos, Downloads) isto não age em nenhum arquivo do acervo atual.
+        limite = limite_do_nome(pasta_pai_abs, extensao=".mp4", prefixo=prefixo)
+        if len(nome_limpo) > limite:
+            print(f"✂️  Nome encurtado para caber no caminho ({limite} chars): {nome_limpo}")
+            nome_limpo = limpar_nome_arquivo(nome_limpo, limite=limite)
+            item_dashboard['nome'] = nome_limpo
+            if limite <= PISO_NOME:
+                print(f"⚠️  A pasta de destino é funda demais; escolha um caminho "
+                      f"mais curto para a biblioteca.")
+
+        nome_desejado = prefixo + nome_limpo
         nome_da_pasta = _resolver_componente(pasta_pai_abs, nome_desejado)
 
         try:

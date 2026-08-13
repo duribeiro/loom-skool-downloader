@@ -33,12 +33,16 @@ LIMITE_NOME = 80
 _MAX_EXTENSAO = 12
 
 
-def limpar_nome_arquivo(nome):
+def limpar_nome_arquivo(nome, limite=None):
     """
     Remove caracteres proibidos em nomes de arquivos do Windows/Linux e corta o
-    que passar de `LIMITE_NOME`.
+    que passar de `limite` (padrão `LIMITE_NOME`).
     Ex: "Aula: 01?" vira "Aula 01"
+
+    `limite` menor entra quando o CAMINHO inteiro está apertado — ver
+    `limite_do_nome`.
     """
+    limite = LIMITE_NOME if limite is None else limite
     if not nome: return "sem_titulo"
 
     # Decodifica entidades HTML (ex: &amp; vira &)
@@ -75,10 +79,46 @@ def limpar_nome_arquivo(nome):
     # bases de arquivo (aula, módulo, comunidade), onde um ponto no meio do título
     # ("Aula 1.5 - Intro") não é extensão. Para nome que TEM extensão de verdade,
     # use `cortar_preservando_extensao`.
-    if len(nome) > LIMITE_NOME:
-        nome = nome[:LIMITE_NOME].rstrip()
+    if len(nome) > limite:
+        nome = nome[:limite].rstrip()
 
     return nome or "sem_titulo"
+
+
+# Teto do CAMINHO INTEIRO. O Windows corta em 260; 255 deixa margem para o
+# ".part"/sufixo temporário que alguns downloads criam antes do rename.
+MAX_CAMINHO = 255
+
+# Abaixo disto o nome deixa de identificar a aula, e truncar mais só troca um
+# problema por outro. Quem chegar aqui recebe um aviso: o caminho de destino é que
+# está fundo demais, e isso o usuário resolve escolhendo outra pasta.
+PISO_NOME = 25
+
+
+def limite_do_nome(pasta_pai_abs, extensao=".mp4", prefixo="", aparicoes=2):
+    """Quanto pode ter o nome da aula, para o CAMINHO INTEIRO caber em `MAX_CAMINHO`.
+
+    Por que não basta o `LIMITE_NOME` fixo: ele é teto POR COMPONENTE, e o limite do
+    Windows é do caminho inteiro. MEDIDO em 13/08/2026 — com a `output/` dentro do
+    projeto (82 chars só de prefixo) o pior caso deu 277, mesmo com o nome já em 80.
+
+    O caminho final é:
+
+        <pasta_pai>\\<prefixo><nome>\\<nome><extensão>
+
+    O nome aparece DUAS vezes (pasta da aula e arquivo), por isso o que sobra é
+    dividido por `aparicoes`. Devolve no máximo `LIMITE_NOME` (legibilidade) e no
+    mínimo `PISO_NOME`.
+
+    O resultado depende da pasta-pai, então mover a biblioteca pode mudar o nome de
+    quem foi truncado. Na prática isso atinge pouquíssimos arquivos — com a `output/`
+    num lugar normal, nenhum (medido: pior caso 232 de 260).
+    """
+    fixo = len(pasta_pai_abs) + aparicoes + len(prefixo) + len(extensao)
+    disponivel = MAX_CAMINHO - fixo
+    if disponivel <= 0:
+        return PISO_NOME
+    return max(PISO_NOME, min(LIMITE_NOME, disponivel // max(1, aparicoes)))
 
 
 def prefixo_de_ordem(ordem, total=None):

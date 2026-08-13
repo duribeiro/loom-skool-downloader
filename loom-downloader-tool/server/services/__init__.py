@@ -6,6 +6,9 @@ from .utils import (
     limpar_nome_arquivo,
     cortar_preservando_extensao,
     prefixo_de_ordem,
+    limite_do_nome,
+    PISO_NOME,
+    MAX_CAMINHO,
     limpar_pasta,
     HEADERS
 )

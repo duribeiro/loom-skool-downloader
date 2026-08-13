@@ -136,3 +136,58 @@ def test_nosso_nome_sobrevive_ao_sanitize_do_ytdlp():
         nosso = limpar_nome_arquivo(bruto)
         assert sanitize_path(nosso) == nosso, \
             f"yt-dlp reescreveria {nosso!r} como {sanitize_path(nosso)!r}"
+
+
+# --- ORÇAMENTO DO CAMINHO INTEIRO ---
+# `LIMITE_NOME` é teto por COMPONENTE; o limite do Windows é do caminho inteiro.
+# MEDIDO em 13/08/2026: com a output/ dentro do projeto (82 chars só de prefixo), o
+# pior caso deu 277 mesmo com o nome já em 80 — e aí o Get-ChildItem do PowerShell
+# reporta a pasta como VAZIA, escondendo 1,1 GB de vídeo.
+
+import os as _os
+from services.utils import limite_do_nome, MAX_CAMINHO, PISO_NOME
+
+
+def _caminho_final(pai, nome, prefixo="03 - ", ext=".mp4"):
+    """O caminho que o servidor realmente monta: o nome entra DUAS vezes."""
+    return _os.path.join(pai, prefixo + nome, nome + ext)
+
+
+def test_caminho_final_cabe_seja_qual_for_a_pasta_pai():
+    nome = "A" * 200
+    for pai in (r"C:\Users\Eduardo Ribeiro\Videos\Sifao\YouTube\Hashtag Treinamentos",
+                r"E:\CURSOS\Programação\Projetos\loom-downloader\hsl-lab\loom-downloader-tool\output\X",
+                r"C:\a\b\c\d\e\f\g\h\i\j\k\l\m\n\o\p\q\r\s\t\u\v\w\x\y\z\Comunidade\Curso\Modulo"):
+        limite = limite_do_nome(pai, extensao=".mp4", prefixo="03 - ")
+        curto = limpar_nome_arquivo(nome, limite=limite)
+        assert len(_caminho_final(pai, curto)) <= 260, \
+            f"estourou com pai de {len(pai)} chars"
+
+
+def test_pasta_rasa_nao_encurta_nada():
+    # Com a biblioteca num lugar normal, o orçamento não deve agir: teto continua 80.
+    pai = r"C:\Users\Eduardo Ribeiro\Videos\Sifao\Comunidade\Curso\01 - Modulo"
+    assert limite_do_nome(pai) == LIMITE_NOME
+
+
+def test_pasta_funda_encurta_o_nome():
+    pai = "C:\\" + "\\".join(["pasta_bem_comprida"] * 8)
+    assert limite_do_nome(pai) < LIMITE_NOME
+
+
+def test_nunca_devolve_menos_que_o_piso():
+    """Abaixo do piso o nome deixa de identificar a aula; aí o problema é a pasta
+    de destino, e o servidor avisa em vez de picotar mais."""
+    pai = "C:\\" + "\\".join(["x" * 40] * 8)
+    assert limite_do_nome(pai) == PISO_NOME
+
+
+def test_limite_e_deterministico():
+    # Mesmo pai -> mesmo limite -> mesmo nome, senão o "já baixei?" quebra.
+    pai = r"C:\Users\X\Videos\Sifao\Com\Curso\Modulo"
+    assert limite_do_nome(pai) == limite_do_nome(pai)
+
+
+def test_extensao_e_prefixo_entram_na_conta():
+    pai = r"C:\Users\X\Videos\Sifao\Com\Curso\Modulo"
+    assert limite_do_nome(pai, prefixo="003 - ") <= limite_do_nome(pai, prefixo="")
