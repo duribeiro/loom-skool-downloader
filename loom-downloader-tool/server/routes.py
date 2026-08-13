@@ -1,4 +1,5 @@
 import os
+import threading
 import traceback
 import uuid
 from flask import Blueprint, request, jsonify
@@ -148,22 +149,44 @@ def _pasta_existente_da_aula(pasta_pai_abs, nome_limpo):
     except OSError:
         return None
 
-    candidatos = []
+    return (_equivalentes(pasta_pai_abs, nome_limpo, nomes) or [None])[0]
+
+
+def _equivalentes(pasta_pai_abs, nome_limpo, nomes=None):
+    """Todas as pastas que representam esta aula, NUMERADAS PRIMEIRO.
+
+    A ordem importa e já causou estrago. A versão anterior devolvia de imediato a
+    pasta SEM número quando ela existia (`if nome == nome_limpo: return nome`), e aí,
+    num diretório com `Dia 3` E `03 - Dia 3`, ela escolhia a antiga, tentava renomear
+    para a nova, levava "já existe" e gravava na antiga — **para sempre**. O estado
+    partido nunca se curava, nem repetindo o download.
+
+    RELATADO e reproduzido em 13/08/2026: `Bootcamp Mês 1` ficou com as duas pastas,
+    e um vídeo de 89,84 MB foi rebaixado à toa (hash idêntico ao que já existia).
+
+    Preferir a numerada faz o servidor convergir para o estado desejado em vez de
+    ficar preso no antigo.
+    """
+    if nomes is None:
+        try:
+            nomes = os.listdir(pasta_pai_abs)
+        except OSError:
+            return []
+
+    exatos, numerados = [], []
+    sufixo = f" - {nome_limpo}"
     for nome in nomes:
         if not os.path.isdir(os.path.join(pasta_pai_abs, nome)):
             continue
         if nome == nome_limpo:
-            return nome                      # sem prefixo: casa exato, decide na hora
-        if nome.endswith(f" - {nome_limpo}"):
-            prefixo = nome[:-len(f" - {nome_limpo}")]
-            if prefixo.isdigit():
-                candidatos.append(nome)
+            exatos.append(nome)
+        elif nome.endswith(sufixo) and nome[:-len(sufixo)].isdigit():
+            numerados.append(nome)
 
-    # Mais de um número para a mesma aula é estado inconsistente (renumeração pela
-    # metade). Escolher um seria esconder o problema; o menor é o determinístico.
-    if len(candidatos) > 1:
-        print(f"⚠️  '{nome_limpo}' tem {len(candidatos)} pastas numeradas: {sorted(candidatos)}")
-    return sorted(candidatos)[0] if candidatos else None
+    if len(numerados) + len(exatos) > 1:
+        print(f"⚠️  '{nome_limpo}' existe em {len(numerados) + len(exatos)} pastas: "
+              f"{sorted(numerados + exatos)} — usando a numerada.")
+    return sorted(numerados) + exatos
 
 
 def _sem_prefixo_de_ordem(nome):
@@ -179,16 +202,39 @@ def _resolver_componente(pasta_pai_abs, nome_desejado):
     prefixo de ordem) e o número mudou, RENOMEIA em vez de criar outra.
     """
     nome_base = _sem_prefixo_de_ordem(nome_desejado)
-    existente = _pasta_existente_da_aula(pasta_pai_abs, nome_base)
+    candidatas = _equivalentes(pasta_pai_abs, nome_base)
 
-    if not existente:
+    if not candidatas:
         return nome_desejado
-    if existente == nome_desejado:
-        return existente
+
     if nome_desejado == nome_base:
-        # O pedido veio SEM ordem; a pasta numerada em disco continua valendo.
-        return existente
-    return _renomear_pasta_da_aula(pasta_pai_abs, existente, nome_desejado)
+        # PEDIDO SEM ORDEM (link colado, curso sem `children`). Não sabemos a
+        # posição, então não renomeamos nada — mas usamos a pasta NUMERADA se ela
+        # existir. `candidatas` já vem com as numeradas na frente.
+        #
+        # Devolver a sem número aqui foi o que manteve o `Dia 3` partido: o pill
+        # ressuscitava a pasta antiga a cada tentativa.
+        return candidatas[0]
+
+    # PEDIDO COM ORDEM. A pasta que já tem o nome certo vence qualquer rename —
+    # sem isto, um diretório com `Dia 3` E `03 - Dia 3` tentava renomear a antiga
+    # por cima da nova, levava "já existe" e ficava preso na antiga para sempre.
+    if nome_desejado in candidatas:
+        return nome_desejado
+    return _renomear_pasta_da_aula(pasta_pai_abs, candidatas[0], nome_desejado)
+
+
+# Resolver o caminho é LER-DECIDIR-RENOMEAR, e isso não é atômico.
+#
+# CAUSA MEDIDA em 13/08/2026: os 4 workers baixam em paralelo e duas aulas do MESMO
+# módulo caíram juntas. O worker A leu `Dia 3`, renomeou para `03 - Dia 3` e gravou
+# ali; o worker B, que já tinha lido `Dia 3` antes do rename, recriou a pasta antiga
+# com `os.makedirs` e baixou 89,84 MB que já existiam (hash idêntico, conferido).
+# Sobraram as duas pastas, e o servidor passou a gravar sempre na errada.
+#
+# O trecho protegido é curto (um `listdir` e talvez um `rename`), então serializar
+# não custa vazão perceptível — o download em si segue paralelo.
+_TRAVA_CAMINHO = threading.Lock()
 
 
 def _resolver_caminho(pasta_relativa):
@@ -366,31 +412,27 @@ def worker_download(url, pasta_destino, nome_arquivo_sugerido, item_dashboard,
     # existe: a árvore numerada inteira nasceria ao lado da antiga e TODAS as aulas
     # seriam rebaixadas. Exatamente a falha que a trava existia para evitar, um nível
     # acima de onde ela olhava.
-    pasta_pai = _resolver_caminho(
-        pasta_destino[1:] if pasta_destino.startswith(os.sep) else pasta_destino)
-    pasta_pai_limpa = pasta_pai
+    #
+    # TUDO ISTO SOB UMA TRAVA, e a criação da pasta junto: sem ela, dois workers do
+    # mesmo módulo se atropelam (ver `_TRAVA_CAMINHO`). O `makedirs` entra dentro da
+    # trava de propósito — se ficasse fora, o segundo worker leria o diretório antes
+    # de o primeiro tê-lo criado e recriaria a pasta antiga.
+    with _TRAVA_CAMINHO:
+        pasta_pai = _resolver_caminho(
+            pasta_destino[1:] if pasta_destino.startswith(os.sep) else pasta_destino)
+        pasta_pai_limpa = pasta_pai
 
-    # Onde o número muda, a pasta é RENOMEADA em vez de duplicada. Assim um "baixar
-    # tudo" — que pula tudo o que já existe — vira uma RENUMERAÇÃO COMPLETA sem
-    # baixar um byte, e uma reordenação no Skool reordena o disco de graça.
-    pasta_pai_abs = os.path.join(PASTA_OUTPUT, pasta_pai_limpa)
-    nome_desejado = prefixo_de_ordem(ordem, ordem_total) + nome_limpo
-    nome_da_pasta = _pasta_existente_da_aula(pasta_pai_abs, nome_limpo)
+        # Onde o número muda, a pasta é RENOMEADA em vez de duplicada. Assim um
+        # "baixar tudo" — que pula tudo o que já existe — vira uma RENUMERAÇÃO
+        # COMPLETA sem baixar um byte, e uma reordenação no Skool sai de graça.
+        pasta_pai_abs = os.path.join(PASTA_OUTPUT, pasta_pai_limpa)
+        nome_desejado = prefixo_de_ordem(ordem, ordem_total) + nome_limpo
+        nome_da_pasta = _resolver_componente(pasta_pai_abs, nome_desejado)
 
-    if not nome_da_pasta:
-        nome_da_pasta = nome_desejado
-    elif nome_da_pasta != nome_desejado and prefixo_de_ordem(ordem, ordem_total):
-        # RENOMEIA em vez de baixar de novo.
-        #
-        # Sem isto a numeração só valeria para download NOVO: as 522 pastas já em
-        # disco (medido em 12/08/2026) ficariam para sempre sem número, e a ordem do
-        # curso nunca chegaria ao disco.
-        #
-        # Com isto, um "baixar tudo" — que pula tudo o que já existe — vira uma
-        # RENUMERAÇÃO COMPLETA sem baixar um byte. E quando o curso for reordenado no
-        # Skool, o mesmo caminho reordena o disco de graça.
-        nome_da_pasta = _renomear_pasta_da_aula(pasta_pai_abs, nome_da_pasta,
-                                                nome_desejado)
+        try:
+            os.makedirs(os.path.join(pasta_pai_abs, nome_da_pasta), exist_ok=True)
+        except OSError as erro:
+            print(f"⚠️  Não consegui criar a pasta da aula '{nome_da_pasta}': {erro}")
 
     pasta_destino = os.path.join(pasta_pai, nome_da_pasta)
     item_dashboard['folder'] = pasta_destino

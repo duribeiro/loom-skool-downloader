@@ -295,6 +295,62 @@ introduzem regressões neste projeto. Fica registrado para um plano próprio, co
 caminho de reprodução: abrir uma aula do Skool sem player detectável, navegar para
 outra sem F5, e conferir se o pill antigo continua no DOM.
 
+## O uso real pegou o que a revisão não pegou (13/08/2026)
+
+RELATADO: no `Bootcamp Mês 1`, quase tudo renumerou — mas o **Dia 3** não, e uma aula
+foi baixada de novo. Repetir pelo pill não corrigia.
+
+**Estado encontrado no disco:**
+
+```
+Bootcamp Mês 1/
+├── 03 - Dia 3/
+│   ├── 01 - Monte sua proposta comercial/     renomeada
+│   └── Enviar 20 mensagens de prospecção/     SEM número
+└── Dia 3/
+    └── 02 - Enviar 20 mensagens de prospecção/
+        └── ...mp4  89,84 MB  13/08 08:24      REBAIXADO
+```
+
+Hash SHA-256: o mp4 novo é **idêntico** ao que já existia. Varredura na biblioteca
+inteira: **`Dia 3` é o único módulo partido**.
+
+### Bug 1 — corrida entre workers (foi ela que partiu a pasta)
+
+Resolver o caminho é ler → decidir → renomear, e não era atômico. Os 4 workers rodam
+em paralelo e as **duas aulas do Dia 3 caíram na mesma janela**:
+
+- worker A leu `Dia 3`, renomeou para `03 - Dia 3`, gravou lá;
+- worker B, que já tinha lido `Dia 3` antes do rename, recriou a pasta antiga com
+  `makedirs` e baixou 89,84 MB que já existiam.
+
+Explica por que só nesse módulo: é onde duas aulas concorreram.
+
+**Correção:** `_TRAVA_CAMINHO` em volta de resolver + criar a pasta. O `makedirs`
+entra DENTRO da trava; fora dela, o segundo worker leria o diretório antes de o
+primeiro tê-lo criado. Teste dispara dois workers de verdade no mesmo módulo.
+
+### Bug 2 — o estado partido nunca se curava
+
+Reproduzido com as duas pastas presentes:
+
+```
+_pasta_existente_da_aula devolve: 'Dia 3'
+⚠️  Não renomeei 'Dia 3': '03 - Dia 3' já existe.
+resolve para: 'Dia 3'
+```
+
+O `if nome == nome_limpo: return nome` devolvia a pasta SEM número de imediato,
+tentava renomear por cima da numerada, levava "já existe" e gravava na antiga —
+**para sempre**. Foi por isso que repetir pelo pill não adiantava.
+
+A hipótese do dono do projeto estava certa: *"ele detecta que já existe uma aula e
+não renomeia"*.
+
+**Correção:** `_equivalentes` devolve as numeradas PRIMEIRO e avisa quando acha o
+estado partido, em vez de escolher calado. Pedido sem ordem também passa a usar a
+numerada — devolver a antiga era o que fazia o pill ressuscitar a pasta velha.
+
 ## Estado atual
 
 Fases 1, 2 e 3 **feitas**; **156 testes verdes**, `node --check` OK.

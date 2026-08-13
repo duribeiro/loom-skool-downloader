@@ -572,3 +572,75 @@ def test_anexo_adotado_perde_o_prefixo_e_nao_duplica(tmp_path):
     assert not (pasta_aula / "Aula 1 - template.json").exists(), \
         "guardou com o nome antigo — vai duplicar na próxima execução"
     assert (pasta_aula / "Aula 1.mp4").exists(), "o vídeo mantém o nome da aula"
+
+
+# --- ESTADO PARTIDO: a mesma pasta existindo com e sem número ---
+# RELATADO em 13/08/2026: `Bootcamp Mês 1` ficou com `Dia 3` E `03 - Dia 3`, e o
+# servidor gravava sempre na antiga — nem repetir o download curava.
+
+def test_pasta_partida_converge_para_a_numerada(tmp_path):
+    """Com as duas pastas, vence a NUMERADA (o estado desejado).
+
+    A versão anterior devolvia a sem número de imediato, tentava renomear para a
+    numerada, levava "já existe" e gravava na antiga PARA SEMPRE.
+    """
+    (tmp_path / "Dia 3").mkdir()
+    (tmp_path / "03 - Dia 3").mkdir()
+
+    assert routes._resolver_componente(str(tmp_path), "03 - Dia 3") == "03 - Dia 3"
+
+
+def test_pasta_partida_avisa(tmp_path, capsys):
+    """Estado inconsistente não pode ser silencioso: é perda de dado em potencial."""
+    (tmp_path / "Dia 3").mkdir()
+    (tmp_path / "03 - Dia 3").mkdir()
+
+    routes._resolver_componente(str(tmp_path), "03 - Dia 3")
+
+    assert "2 pastas" in capsys.readouterr().out
+
+
+def test_pedido_sem_ordem_com_pasta_partida_usa_a_numerada(tmp_path):
+    # O pill de uma aula sem ordem conhecida não pode reviver a pasta antiga.
+    (tmp_path / "Dia 3").mkdir()
+    (tmp_path / "03 - Dia 3").mkdir()
+
+    assert routes._resolver_componente(str(tmp_path), "Dia 3") == "03 - Dia 3"
+
+
+def test_workers_concorrentes_no_mesmo_modulo_nao_partem_a_pasta(tmp_path, monkeypatch):
+    """Dois workers do MESMO módulo não podem criar duas pastas.
+
+    CAUSA MEDIDA em 13/08/2026: os 4 workers baixam em paralelo, duas aulas do Dia 3
+    caíram juntas, e enquanto um renomeava `Dia 3` -> `03 - Dia 3` o outro recriava
+    `Dia 3` com `makedirs` — rebaixando 89,84 MB que já existiam (hash idêntico).
+    """
+    import threading
+
+    monkeypatch.setattr(routes, "PASTA_OUTPUT", str(tmp_path))
+    monkeypatch.setattr(routes, "extrair_metadados", lambda url: ("t", "m3u8"))
+    monkeypatch.setattr(routes, "converter_final", lambda *a, **k: True)
+    monkeypatch.setattr(routes, "limpar_pasta", lambda *a, **k: None)
+    monkeypatch.setattr(routes, "processar_download", lambda *a, **k: True)
+
+    modulo = tmp_path / "Com" / "Curso" / "Dia 3"
+    for nome in ("Monte sua proposta comercial", "Enviar 20 mensagens"):
+        (modulo / nome).mkdir(parents=True)
+        (modulo / nome / f"{nome}.mp4").write_bytes(b"x" * 2_000_000)
+
+    def baixa(nome, ordem):
+        item = _item(nome=nome, url="https://www.loom.com/embed/abc",
+                     folder="Com/Curso/03 - Dia 3")
+        routes.worker_download(item["url"], item["folder"], item["nome"], item,
+                               None, None, None, None, ordem, 2)
+
+    fios = [threading.Thread(target=baixa, args=(n, i + 1)) for i, n in
+            enumerate(("Monte sua proposta comercial", "Enviar 20 mensagens"))]
+    for f in fios:
+        f.start()
+    for f in fios:
+        f.join()
+
+    curso = tmp_path / "Com" / "Curso"
+    assert [p.name for p in curso.iterdir()] == ["03 - Dia 3"], \
+        f"a pasta do módulo se partiu: {sorted(p.name for p in curso.iterdir())}"
