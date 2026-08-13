@@ -19,10 +19,11 @@ explícita.
 
 | Documento | Assunto |
 |---|---|
-| [ordem-das-aulas-no-disco.md](a-fazer/ordem-das-aulas-no-disco.md) | Disco ordena alfabeticamente e destrói a sequência do curso; a ordem só existe na posição do array `children` |
+| [aplicativo-instalavel.md](a-fazer/aplicativo-instalavel.md) | **Próximo grande passo.** `.exe` único, sem terminal, interface estilo IDM e pasta de saída configurável |
+| [ordem-das-aulas-no-disco.md](a-fazer/ordem-das-aulas-no-disco.md) | Numeração das pastas — código pronto e validado; falta só a limpeza da `Dia 3` órfã |
 | [limpeza-orfaos-ytdlp.md](a-fazer/limpeza-orfaos-ytdlp.md) | ~1 GB de `._yt_*` órfãos de reinícios de servidor |
 | [outras-comunidades.md](a-fazer/outras-comunidades.md) | Pastas de canal do YouTube nas 4 comunidades não medidas |
-| [extensao-standalone.md](a-fazer/extensao-standalone.md) | Tirar a dependência do servidor Python |
+| [extensao-standalone.md](a-fazer/extensao-standalone.md) | *(supersedido)* levantamento da extensão sem Python, descartado |
 
 ## Concluído
 

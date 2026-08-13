@@ -1,6 +1,12 @@
 # Extensão standalone (tirar o servidor Python do caminho)
 
-> **STATUS: IDEIA.** Nada investigado a fundo. Objetivo de longo prazo.
+> **STATUS: SUPERSEDIDO em 13/08/2026.** A decisão foi tomada e é o **caminho B**
+> (empacotar o que existe), detalhado em [[aplicativo-instalavel]].
+>
+> Este documento fica pelo levantamento da **opção A** (extensão pura, sem Python),
+> que segue válido caso alguém queira reabrir a discussão — e pelo motivo de ela ter
+> sido descartada: a fusão vídeo+áudio sem FFmpeg custa `ffmpeg.wasm` (pesado e
+> lento) ou entregar faixas separadas.
 
 ## Por que
 
