@@ -20,6 +20,13 @@ trash/
 
 # Ignorar arquivos de configuração do VS Code (opcional, mas recomendado)
 .vscode/
+.idea/
+
+# Configuração LOCAL do Claude Code (chaves de permissão da máquina, não do projeto).
+# VERIFICADO em 13/08/2026: hoje ela só escapa porque o gitignore GLOBAL desta
+# máquina a cobre — `git check-ignore -v` aponta para ~/.config/git/ignore. Num
+# clone noutra máquina ela apareceria como untracked e acabaria commitada.
+.claude/settings.local.json
 # Cache do pytest
 .pytest_cache/
 

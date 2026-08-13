@@ -33,8 +33,18 @@ EXT_PRINCIPAIS = {".mp4", ".md"}
 # Pastas de serviço: não são biblioteca e não devem ser reorganizadas.
 # `_BENCH` recebe downloads do benchmark (mexer nela durante a medição corromperia
 # arquivos em escrita) e `_DUPLICADOS` é a quarentena, que existe justamente para
-# preservar os caminhos originais.
+# preservar os caminhos ORIGINAIS — reorganizá-la destruiria a única informação que
+# ela guarda.
+#
+# Qualquer pasta começando com `_` na raiz da output/ é de serviço. A lista fixa já
+# falhou uma vez: `_DIAG22` (diagnóstico manual) não estava nela, e uma execução com
+# `--executar` teria tratado a pasta como biblioteca. Prefixo é regra; lista é
+# manutenção que alguém esquece.
 IGNORAR = {"_BENCH", "_DUPLICADOS"}
+
+
+def _eh_pasta_de_servico(nome):
+    return nome in IGNORAR or nome.startswith("_")
 
 
 def _eh_pasta_de_aula(pasta):
@@ -189,7 +199,7 @@ def migrar(executar=False):
 
     for raiz, subpastas, _ in os.walk(PASTA_OUTPUT):
         # Poda as pastas de serviço antes de qualquer coisa.
-        subpastas[:] = [s for s in subpastas if s not in IGNORAR]
+        subpastas[:] = [s for s in subpastas if not _eh_pasta_de_servico(s)]
 
         grupos = _agrupar(raiz)
 

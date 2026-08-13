@@ -167,3 +167,33 @@ def test_sem_prefixo_de_ordem_so_corta_digitos():
     # "Bônus" não é número: o nome inteiro é o nome da aula.
     assert mig._sem_prefixo_de_ordem("Bonus - Aula X") == "Bonus - Aula X"
     assert mig._sem_prefixo_de_ordem("Aula X") == "Aula X"
+
+
+# --- PASTAS DE SERVIÇO ---
+# A lista fixa já falhou: `_DIAG22` (diagnóstico manual) não estava nela, e um
+# `--executar` teria reorganizado uma pasta de serviço como se fosse biblioteca.
+
+def test_pastas_de_servico_conhecidas_sao_ignoradas():
+    assert mig._eh_pasta_de_servico("_BENCH")
+    assert mig._eh_pasta_de_servico("_DUPLICADOS")
+
+
+def test_qualquer_pasta_com_underline_e_de_servico():
+    """Prefixo é regra; lista é manutenção que alguém esquece."""
+    assert mig._eh_pasta_de_servico("_DIAG22")
+    assert mig._eh_pasta_de_servico("_qualquer_coisa_nova")
+
+
+def test_pasta_de_comunidade_nao_e_de_servico():
+    for nome in ("AI Makers Club", "BACKROOM.EXE", "YouTube", "Z4 CLIENTS @dougdemarco_"):
+        assert not mig._eh_pasta_de_servico(nome), nome
+
+
+def test_pasta_de_servico_nao_e_reorganizada(output_falso, capsys):
+    servico = output_falso / "_DIAG22"
+    servico.mkdir()
+    (servico / "diag dia 22.mp4").write_bytes(b"x")
+
+    mig.migrar(executar=False)
+
+    assert "Aulas que ganham pasta : 0" in capsys.readouterr().out
