@@ -16,11 +16,29 @@ puro em vez de quebrar. Assim, um curso que use negrito, listas ou headings
 """
 import os
 import json
+import hashlib
 
-from .utils import limpar_nome_arquivo
+from .utils import limpar_nome_arquivo, cortar_preservando_extensao
 from .caminhos import PASTA_OUTPUT
 
 PREFIXO_V2 = "[v2]"
+
+
+def _carregar_desc(desc_bruto):
+    """Tira o prefixo `[v2]` e devolve os nós já em objeto Python, ou None.
+
+    Um lugar só para o parse: `converter_desc` (que renderiza) e `imagens_do_desc`
+    (que coleta os arquivos) TÊM que enxergar exatamente a mesma árvore, senão o
+    Markdown referencia uma imagem que ninguém baixou.
+    """
+    if not desc_bruto or not isinstance(desc_bruto, str):
+        return None
+
+    corpo = desc_bruto[len(PREFIXO_V2):] if desc_bruto.startswith(PREFIXO_V2) else desc_bruto
+    try:
+        return json.loads(corpo)
+    except (ValueError, TypeError):
+        return None
 
 
 # --- MARKS (formatação inline) -----------------------------------------------
@@ -50,6 +68,67 @@ def _aplicar_marks(texto, marks):
     return texto
 
 
+# --- IMAGENS -----------------------------------------------------------------
+
+def nome_local_da_imagem(attrs):
+    """Nome do arquivo da imagem em disco. DETERMINÍSTICO.
+
+    O Markdown aponta para este nome e o worker grava com este nome — se as duas
+    pontas divergirem, a imagem baixa mas o `.md` referencia um arquivo que não
+    existe, e o defeito só aparece quando alguém abre o texto.
+
+    O Skool guarda o nome original em `title`/`alt` ("Screenshot ....png"). Sem
+    nome utilizável, deriva da URL: continua estável entre execuções, então o
+    "já baixei?" segue funcionando.
+    """
+    attrs = attrs or {}
+    bruto = attrs.get("title") or attrs.get("alt") or ""
+    if bruto and os.path.splitext(bruto)[1]:
+        return cortar_preservando_extensao(bruto)
+
+    src = attrs.get("src") or attrs.get("originalSrc") or ""
+    if not src:
+        return ""
+    marca = hashlib.sha1(src.encode("utf-8")).hexdigest()[:10]
+    ext = os.path.splitext(src.split("?")[0])[1]
+    if len(ext) > 5 or " " in ext:
+        ext = ".png"
+    return f"imagem-{marca}{ext or '.png'}"
+
+
+def imagens_do_desc(desc_bruto):
+    """Lista `[{url, nome}]` das imagens do texto — a mesma forma dos anexos.
+
+    De propósito: assim o worker reaproveita `baixar_anexos` em vez de ganhar um
+    baixador novo (política de "reutilizar antes de criar").
+    """
+    nos = _carregar_desc(desc_bruto)
+    if not nos:
+        return []
+
+    achadas, vistas = [], set()
+
+    def andar(no):
+        if isinstance(no, list):
+            for filho in no:
+                andar(filho)
+            return
+        if not isinstance(no, dict):
+            return
+        if no.get("type") == "image":
+            attrs = no.get("attrs") or {}
+            url = attrs.get("src") or attrs.get("originalSrc")
+            nome = nome_local_da_imagem(attrs)
+            if url and nome and url not in vistas:
+                vistas.add(url)
+                achadas.append({"url": url, "nome": nome})
+        for valor in no.values():
+            andar(valor)
+
+    andar(nos)
+    return achadas
+
+
 # --- NÓS (blocos) ------------------------------------------------------------
 
 def _renderizar(no):
@@ -72,7 +151,38 @@ def _renderizar(no):
         nivel = (no.get("attrs") or {}).get("level", 2)
         return "#" * int(nivel) + " " + _renderizar(no.get("content", [])) + "\n\n"
 
-    if tipo in ("bulletList", "orderedList"):
+    if tipo == "image":
+        # IMAGEM NO TEXTO DA AULA.
+        #
+        # RELATADO em 13/08/2026, na BACKROOM.EXE: "os links estão presentes, mas a
+        # imagem não foi inserida no Markdown". Sem este caso, o nó caía no ramo
+        # "tipo desconhecido", não tinha `content`, e voltava string vazia — a aula
+        # perdia a imagem SEM AVISO.
+        #
+        # MEDIDO, a forma do nó:
+        #   {"type":"image","attrs":{"alt":"Screenshot ....png","fileID":"...",
+        #                            "src":"https://assets.skool.com/f/...","title":"..."}}
+        #
+        # Aponta para o arquivo LOCAL, não para a URL: a `src` do Skool pode sair do
+        # ar e a biblioteca existe para funcionar offline. Quem baixa é o worker,
+        # usando `imagens_do_desc` — e os dois nomes têm que bater, por isso ambos
+        # passam por `nome_local_da_imagem`.
+        attrs = no.get("attrs") or {}
+        nome = nome_local_da_imagem(attrs)
+        if not nome:
+            return ""
+        alt = (attrs.get("alt") or attrs.get("title") or "imagem").replace("]", ")")
+        # `<...>` porque nome de imagem do Skool costuma ter espaço.
+        return f"![{alt}](<{nome}>)\n\n"
+
+    if tipo in ("horizontalRule", "horizontal_rule", "hr"):
+        # Também sumia em silêncio (6 ocorrências só no curso medido).
+        return "---\n\n"
+
+    if tipo in ("bulletList", "orderedList", "unorderedList", "bullet_list", "ordered_list"):
+        # `unorderedList` é o nome que o Skool usa DE VERDADE (medido). Antes ele
+        # caía no ramo genérico: o conteúdo sobrevivia por acidente, mas sem a
+        # quebra de linha que separa a lista do parágrafo seguinte.
         return _renderizar(no.get("content", [])) + "\n"
 
     if tipo == "listItem":
@@ -98,11 +208,8 @@ def converter_desc(desc_bruto):
     if not desc_bruto or not isinstance(desc_bruto, str):
         return ""
 
-    corpo = desc_bruto[len(PREFIXO_V2):] if desc_bruto.startswith(PREFIXO_V2) else desc_bruto
-
-    try:
-        nos = json.loads(corpo)
-    except (ValueError, TypeError):
+    nos = _carregar_desc(desc_bruto)
+    if nos is None:
         # Não é o formato esperado: devolve o texto cru como último recurso.
         return desc_bruto.strip()
 

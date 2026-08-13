@@ -17,6 +17,7 @@ from services import (
     processar_download,
     converter_final,
     salvar_aula_md,
+    imagens_do_desc,
     PASTA_OUTPUT,
     baixar_youtube,
     eh_url_youtube,
@@ -538,6 +539,27 @@ def worker_download(url, pasta_destino, nome_arquivo_sugerido, item_dashboard,
                 print(f"⚠️  {falhas_anexo} anexo(s) falharam em '{nome_limpo}'.")
     except Exception as erro:
         print(f"⚠️  Não foi possível baixar anexos de '{nome_limpo}': "
+              f"{type(erro).__name__}: {erro}")
+
+    # C.3. IMAGENS DE DENTRO DO TEXTO.
+    #
+    # RELATADO em 13/08/2026 (BACKROOM.EXE): "os links estão presentes, mas a imagem
+    # não foi inserida no Markdown". O nó `image` não tinha caso no renderizador e
+    # sumia em silêncio.
+    #
+    # Baixamos em vez de só linkar: a `src` do Skool pode sair do ar, e a biblioteca
+    # existe para funcionar offline. `imagens_do_desc` devolve a MESMA forma dos
+    # anexos ({url, nome}), então reaproveita `baixar_anexos` — e o nome de arquivo
+    # sai da mesma função que o Markdown usa na referência, senão o texto apontaria
+    # para um arquivo inexistente.
+    try:
+        imagens = imagens_do_desc(desc)
+        if imagens:
+            baixadas, falhas_img = baixar_anexos(imagens, pasta_destino)
+            if falhas_img:
+                print(f"⚠️  {falhas_img} imagem(ns) do texto falharam em '{nome_limpo}'.")
+    except Exception as erro:
+        print(f"⚠️  Não foi possível baixar imagens do texto de '{nome_limpo}': "
               f"{type(erro).__name__}: {erro}")
 
     # D. Baixar o vídeo, se houver

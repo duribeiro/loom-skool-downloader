@@ -12,7 +12,8 @@ from .utils import (
 
 from .downloader import processar_download
 from .converter import converter_final
-from .texto import montar_markdown, salvar_aula_md
+from .texto import (montar_markdown, salvar_aula_md, imagens_do_desc,
+                    nome_local_da_imagem)
 from .youtube import baixar_youtube, eh_url_youtube, titulo_do_youtube, canal_do_youtube
 from .vimeo import baixar_vimeo, eh_url_vimeo, titulo_do_vimeo, url_player_vimeo
 from .skool import baixar_skool, eh_url_skool_video, url_stream_skool, baixar_anexos
