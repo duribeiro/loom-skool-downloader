@@ -1,6 +1,7 @@
 import os
 import time
 import threading
+from rich.console import Group
 from rich.live import Live
 from rich.layout import Layout
 from rich.panel import Panel
@@ -260,9 +261,15 @@ def _gerar_tabela_ativos(itens, max_fila=5):
         percentual = 0
         if item.get('total', 0) > 0:
             percentual = int((item.get('progresso', 0) / item['total']) * 100)
+        # Trava de segurança. O 200% que apareceu na tela nasceu de progresso não
+        # zerado entre faixas — já corrigido na origem (`routes.atualizar_progresso`),
+        # mas número impossível no painel corrói a confiança em tudo que ele mostra.
+        percentual = max(0, min(100, percentual))
 
-        texto_status = (_ROTULO_STATUS.get(item.get('status'), "Baixando ⬇")
-                        + _formatar_eta(item.get('eta')))
+        # Só a fase. O tempo restante junto ("Baixando vídeo ⬇ · faltam 3m20s")
+        # estourava a largura da coluna e virava ruído. O `eta` continua no item
+        # para quem quiser uma coluna própria depois — aqui ele não entra.
+        texto_status = _ROTULO_STATUS.get(item.get('status'), "Baixando ⬇")
 
         table.add_row(
             f"[bold]{item.get('nome', '?')}[/]",
@@ -289,35 +296,86 @@ def _gerar_tabela_ativos(itens, max_fila=5):
     return table
 
 
-def _gerar_painel_historico(itens):
-    """
-    Cria o painel inferior com o histórico dos últimos downloads concluídos.
-    """
-    concluidos = [d for d in itens if d.get('status') == 'sucesso']
+# Corte do NOME no histórico, para o motivo ainda aparecer numa linha curta.
+_MAX_NOME_HISTORICO = 28
 
-    if not concluidos:
+
+def _cortar(texto, limite):
+    texto = str(texto or '?')
+    return texto if len(texto) <= limite else texto[:limite - 1] + '…'
+
+
+def _linha_de_uma_linha_so(markup):
+    """Texto que NUNCA quebra em duas linhas, seja qual for a largura do terminal.
+
+    MEDIDO: com corte de largura fixa (nome 28 + motivo 44), num terminal de 80
+    colunas o painel rendeu 8 linhas contra um orçamento de 5 — o Live então empilha
+    quadros e a tela vira cascata de bordas. Corte fixo não resolve porque a largura
+    é do terminal, não do texto: quem tem que decidir onde cortar é o Rich, no
+    momento do render. `no_wrap` + `overflow='ellipsis'` faz exatamente isso.
+    """
+    # `no_wrap`/`overflow` como atributos e não como kwargs de `from_markup`: a
+    # versão do Rich aqui não aceita esses kwargs no construtor da fábrica.
+    texto = Text.from_markup(markup)
+    texto.no_wrap = True
+    texto.overflow = "ellipsis"
+    return texto
+
+
+def _gerar_painel_historico(itens):
+    """Histórico recente, com ERRO NA FRENTE — e dizendo de quê.
+
+    Antes mostrava só os últimos sucessos. Mas sucesso o resumo já conta (é o próprio
+    comentário de `_montar_layout`: "o histórico só repete o que o resumo já diz"),
+    enquanto o MOTIVO do erro não aparecia em lugar nenhum da tela.
+
+    RELATADO no uso real (12/08/2026): "deu um erro e eu nem sei o que foi que deu
+    erro, se foi um vídeo, se foi o markdown". O motivo existia — em `logs/erros.log`
+    — mas quem está olhando o painel não vai abrir arquivo.
+
+    O número de linhas é o mesmo de antes (3), então o orçamento de altura não muda.
+    """
+    erros = [d for d in itens if d.get('status') == 'erro']
+    sucessos = [d for d in itens if d.get('status') == 'sucesso']
+
+    if not erros and not sucessos:
         return Panel(
             "[dim]Nenhum download finalizado nesta sessão.[/]",
             title="📜 Histórico Recente",
             border_style="blue"
         )
 
-    # Mostra apenas os últimos 3 para não encher a tela
-    texto_historico = ""
-    for item in concluidos[-3:]:
-        texto_historico += f"✅ {item.get('nome', '?')}\n"
+    linhas = []
+    # Erro primeiro: é a informação que some se não couber.
+    for item in erros[-3:]:
+        nome = _cortar(item.get('nome'), _MAX_NOME_HISTORICO)
+        motivo = item.get('motivo') or 'motivo não registrado'
+
+        # ONDE a aula fica, não só o nome dela. RELATADO em 13/08/2026: "só aparece
+        # o nome da aula, e eu não saberia onde ela fica". Com 22 cursos e centenas
+        # de aulas — várias homônimas entre módulos ("Enviar 20 mensagens de
+        # prospecção" aparece em 6 dias diferentes) — o nome sozinho não localiza.
+        curso, modulo = _partes_do_caminho(item)
+        onde = f"{curso}/{modulo}" if modulo else curso
+        linhas.append(f"[red]❌ {nome}[/] [dim]· {onde} — {motivo}[/]")
+
+    for item in sucessos[-(3 - len(linhas)):] if len(linhas) < 3 else []:
+        linhas.append(f"✅ {_cortar(item.get('nome'), _MAX_NOME_HISTORICO)}")
 
     return Panel(
-        texto_historico.strip(),
+        Group(*[_linha_de_uma_linha_so(l) for l in linhas[:3]]),
         title="📜 Histórico Recente",
-        border_style="green"
+        border_style="red" if erros else "green"
     )
 
 NOME_PROGRAMA = "Sifão"
-# 4.0 e não 3.1: além das features novas (comunidade inteira, vídeo do Skool,
-# anexos), o LAYOUT DA SAÍDA mudou — aulas com 2+ arquivos passam a ter pasta
-# própria. Quem já tem biblioteca vê a estrutura mudar, e isso é quebra de contrato.
-VERSAO = "4.1"
+# A versão MAIOR sobe quando o LAYOUT DA SAÍDA muda, não quando entram features:
+# quem já tem biblioteca vê a estrutura mudar, e isso é quebra de contrato.
+#
+# 4.2: toda aula ganha pasta própria (antes só a partir de 2 arquivos) e as pastas
+# saem NUMERADAS na ordem do curso. Renumerar não custa download — o servidor acha
+# a pasta com ou sem prefixo (`_pasta_existente_da_aula`).
+VERSAO = "4.2"
 
 # Cada bloco carrega UMA linha de respiro embaixo (ver _com_respiro). As alturas
 # abaixo já incluem essa linha — o orçamento da tela precisa contá-la, senão o

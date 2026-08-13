@@ -24,6 +24,21 @@ FORMATO_MELHOR_MP4 = "bv*+ba[ext=m4a]/bv*+ba/b"
 # Abaixo disto, consideramos que o arquivo não é um vídeo de verdade (erro/HTML).
 _TAMANHO_MINIMO = 100_000
 
+# Cada etapa ocupa uma FAIXA da barra, em vez de os 100% inteiros.
+#
+# Antes, cada faixa do yt-dlp enchia a barra até 100%: no fim do vídeo ela ficava
+# cheia e PARADA durante todo o áudio e a conversão, o que parece travamento. Já
+# levou o dono do projeto a quase matar o servidor no meio de 400 MB baixados.
+#
+# Com faixas, 100% passa a significar PRONTO e nada mais. Etapa que não existir
+# (vídeo com faixa única) faz a barra saltar para frente — salto é movimento, e
+# movimento não engana. A conversão fica com 85..99 (`FAIXA_CONVERSAO` em routes).
+FAIXA_DA_FASE = {
+    "baixando video": (0, 45),
+    "baixando audio": (45, 85),
+    "baixando": (0, 85),        # faixa única, já com áudio e vídeo juntos
+}
+
 
 class _LogadorSilencioso:
     """Engole a saída do yt-dlp.
@@ -130,23 +145,18 @@ def baixar_com_ytdlp(url, pasta_relativa_destino, nome_arquivo, callback=None,
         print(f"⚠️  Já existe, download pulado: {nome_limpo}.mp4")
         return True
 
-    # Progresso: mapeia o percentual do yt-dlp para o callback de barra do dashboard.
-    estado = {"reportou_total": False, "ultimo_pct": 0, "faixa": None}
-
+    # Progresso: mapeia o percentual do yt-dlp para a faixa da barra no dashboard.
     def _hook(d):
         if d.get("status") != "downloading":
             return
 
-        # UMA BARRA, VÁRIAS FAIXAS. O yt-dlp baixa vídeo e áudio como downloads
-        # SEPARADOS, um depois do outro. Como `ultimo_pct` só cresce, a barra
-        # chegava a 100% no fim do vídeo e ficava CONGELADA lá durante todo o
-        # áudio e a junção — em vídeo longo isso são minutos parecendo travamento.
-        # RELATADO no uso real: 4 aulas de Office Hours em "100% baixando" sem sair
-        # do lugar, enquanto o disco mostrava 1,5 MB/s de progresso de verdade. O
-        # dono do projeto quase derrubou o servidor achando que tinha travado.
+        # QUAL FAIXA ESTÁ BAIXANDO. O yt-dlp trata vídeo e áudio como downloads
+        # SEPARADOS, um depois do outro, e o `info_dict` diz qual é qual: faixa
+        # sem vídeo tem `vcodec == "none"`, faixa sem áudio tem `acodec == "none"`.
         #
-        # Não basta reiniciar a barra: voltar a zero sem dizer por quê troca um
-        # engano por outro. Por isso a FASE vai junto, e o painel a exibe.
+        # Isso alimenta duas coisas: o RÓTULO da fase no painel e a FAIXA da barra
+        # (ver FAIXA_DA_FASE). Sem essa distinção o painel dizia só "Baixando" e a
+        # barra enchia no fim do vídeo, ficando parada durante todo o áudio.
         info = d.get("info_dict") or {}
         if info.get("vcodec") == "none":
             fase = "baixando audio"
@@ -154,12 +164,6 @@ def baixar_com_ytdlp(url, pasta_relativa_destino, nome_arquivo, callback=None,
             fase = "baixando video"
         else:
             fase = "baixando"       # faixa única, já com áudio e vídeo
-
-        faixa = d.get("filename") or info.get("format_id")
-        if faixa != estado["faixa"]:
-            estado["faixa"] = faixa
-            estado["ultimo_pct"] = 0
-            estado["reportou_total"] = False
 
         # ETA vem pronto do yt-dlp, em segundos, e é por FAIXA — não é o tempo
         # total até o .mp4 final. Melhor um número honesto de escopo limitado do
@@ -169,17 +173,17 @@ def baixar_com_ytdlp(url, pasta_relativa_destino, nome_arquivo, callback=None,
 
         if not callback:
             return
-        if not estado["reportou_total"]:
-            callback(total=100)
-            estado["reportou_total"] = True
+
         total = d.get("total_bytes") or d.get("total_bytes_estimate")
         baixado = d.get("downloaded_bytes") or 0
         if not total:
             return
-        pct = int(baixado * 100 / total)
-        while estado["ultimo_pct"] < pct <= 100:
-            estado["ultimo_pct"] += 1
-            callback()
+
+        # Percentual da AULA inteira, não da faixa: a fração desta faixa mapeada
+        # dentro do trecho da barra que pertence a ela.
+        inicio, fim = FAIXA_DA_FASE.get(fase, FAIXA_DA_FASE["baixando"])
+        fracao = max(0.0, min(1.0, baixado / total))
+        callback(percentual=inicio + fracao * (fim - inicio))
 
     # Nome TEMPORÁRIO fixo (sem o título do usuário) + rename: blinda contra título
     # com '%' (template do outtmpl) e contra colisão entre downloads simultâneos.

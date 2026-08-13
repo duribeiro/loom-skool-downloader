@@ -11,6 +11,7 @@ from services.texto import (
     converter_desc,
     converter_resources,
     montar_markdown,
+    imagens_do_desc,
 )
 
 
@@ -139,3 +140,85 @@ def test_markdown_so_texto_sem_recursos():
     md = montar_markdown("T", d, "")
     assert md == "# T\n\nsó texto\n"
     assert "Recursos" not in md
+
+
+# --- IMAGEM DENTRO DO TEXTO ---
+# RELATADO em 13/08/2026 (BACKROOM.EXE): "os links estão presentes, mas a imagem
+# não foi inserida no Markdown". O nó `image` não tinha caso no renderizador,
+# caía no ramo genérico, não tinha `content` e voltava string vazia.
+
+def _desc(*nos):
+    return "[v2]" + json.dumps(list(nos))
+
+
+IMG = {"type": "image", "attrs": {
+    "alt": "Screenshot 2025-10-03 at 9.16.56 AM.png",
+    "title": "Screenshot 2025-10-03 at 9.16.56 AM.png",
+    "src": "https://assets.skool.com/f/7ab1081/f6a31ba"}}
+
+
+def test_imagem_vira_markdown():
+    md = converter_desc(_desc(IMG))
+    assert "![" in md and "Screenshot 2025-10-03" in md, f"imagem sumiu: {md!r}"
+
+
+def test_imagem_aponta_para_arquivo_local_nao_para_a_url():
+    """A biblioteca existe para funcionar offline; a `src` do Skool pode cair."""
+    md = converter_desc(_desc(IMG))
+    assert "assets.skool.com" not in md, "o .md ficou dependendo da nuvem"
+
+
+def test_nome_no_markdown_bate_com_o_que_sera_baixado():
+    """Se as duas pontas divergirem, a imagem baixa e o texto aponta para o vazio."""
+    md = converter_desc(_desc(IMG))
+    baixadas = imagens_do_desc(_desc(IMG))
+
+    assert len(baixadas) == 1
+    assert baixadas[0]["nome"] in md, \
+        f"o Markdown não referencia {baixadas[0]['nome']!r}"
+
+
+def test_imagens_do_desc_devolve_a_forma_dos_anexos():
+    # Mesma forma {url, nome} — é o que permite reusar `baixar_anexos`.
+    img = imagens_do_desc(_desc(IMG))[0]
+    assert set(img) == {"url", "nome"}
+    assert img["url"].startswith("https://")
+
+
+def test_imagem_repetida_baixa_uma_vez_so():
+    assert len(imagens_do_desc(_desc(IMG, IMG))) == 1
+
+
+def test_imagem_sem_titulo_ganha_nome_estavel():
+    no = {"type": "image", "attrs": {"src": "https://assets.skool.com/f/abc/def"}}
+    a = imagens_do_desc(_desc(no))
+    b = imagens_do_desc(_desc(no))
+    assert a and a == b, "nome instável quebraria o 'já baixei?'"
+
+
+def test_imagem_sem_url_nenhuma_e_ignorada():
+    no = {"type": "image", "attrs": {"alt": "x.png"}}
+    assert imagens_do_desc(_desc(no)) == []
+
+
+def test_desc_sem_imagem_devolve_lista_vazia():
+    assert imagens_do_desc(_desc({"type": "paragraph",
+                                  "content": [{"type": "text", "text": "oi"}]})) == []
+
+
+# --- OUTROS TIPOS QUE TAMBÉM SUMIAM ---
+
+def test_linha_horizontal_aparece():
+    # 6 ocorrências só no curso medido, todas perdidas.
+    assert "---" in converter_desc(_desc({"type": "horizontalRule"}))
+
+
+def test_unorderedList_e_o_nome_que_o_skool_usa():
+    """O código tratava `bulletList`; o Skool manda `unorderedList` (medido)."""
+    lista = {"type": "unorderedList", "content": [
+        {"type": "listItem", "content": [
+            {"type": "paragraph", "content": [{"type": "text", "text": "Abra o agente"}]}]},
+        {"type": "listItem", "content": [
+            {"type": "paragraph", "content": [{"type": "text", "text": "Cole o prompt"}]}]}]}
+    md = converter_desc(_desc(lista))
+    assert "- Abra o agente" in md and "- Cole o prompt" in md

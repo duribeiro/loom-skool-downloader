@@ -37,13 +37,15 @@ Baixador de aulas hospedadas em comunidades do **Skool** — seja qual for onde 
 - **📚 Curso inteiro pelo popup** — na classroom do Skool, o popup detecta o curso da aba e enfileira **todas as aulas** de uma vez (vídeo + texto + anexos), respeitando a estrutura de módulos.
 - **🏘️ Comunidade inteira** — na listagem `/{grupo}/classroom`, o popup lista os cursos, mostra o total de aulas na hora e enfileira tudo com **confirmação em dois passos**. Cursos sem acesso são pulados e reportados.
 - **🎥 5 fontes** — Skool/Loom (HLS próprio), **vídeo hospedado no Skool** (Mux, via `yt-dlp`), YouTube e Vimeo (`yt-dlp`), incluindo **Vimeo privado** do Skool (via `Referer`) e **Loom direto** (`loom.com/share`).
-- **📝 Texto e anexos da aula** — a descrição e os recursos viram um `.md` em Markdown (links, listas, negrito); os arquivos anexos (`file_id` do Skool) são baixados de verdade. Aula sem vídeo não é omitida: vira `.md`.
-- **📁 Uma pasta por aula** — a partir de **2 arquivos** (mp4 + md + anexos) a aula ganha pasta própria; com um só, o arquivo fica solto no módulo.
+- **📝 Texto, imagens e anexos da aula** — a descrição e os recursos viram um `.md` em Markdown (links, listas, negrito); os arquivos anexos (`file_id` do Skool) são baixados de verdade. **As imagens do corpo da aula também são baixadas** e o Markdown aponta para o arquivo local — o texto continua completo offline, mesmo se o Skool tirar a imagem do ar. Aula sem vídeo não é omitida: vira `.md`.
+- **📁 Uma pasta por aula, sempre** — com 1 arquivo ou com 5. O lugar é função da **identidade** da aula; o conteúdo só decide quais arquivos existem, nunca onde ficam.
+- **🔢 Na ordem do curso, não na alfabética** — as pastas saem numeradas (`01 - `, `02 - `) seguindo a sequência do Skool. Sem isso, `Dia 10` vem antes de `Dia 2` e a primeira aula do módulo cai em último. Renumerar **não custa download**: mandar baixar de novo uma biblioteca pronta só renomeia.
 - **📁 YouTube por canal** — vídeos do YouTube **colados no popup** caem em `output/YouTube/<Canal>/`. Aula do Skool cujo vídeo mora no YouTube **não** ganha esse nível — ela segue a estrutura do curso.
 - **🧠 Caminho correto + dedup** — cada aula grava no caminho completo (Comunidade/Curso/Módulo) e o que já existe é **pulado**.
 - **⚡ Download paralelo** — 12 threads por aula nos fragmentos HLS e **4 aulas simultâneas** por padrão (número medido, ajustável por `SIFAO_DOWNLOADS_SIMULTANEOS`). Enfileiramento de curso resiliente a recarregar a página.
 - **🔁 Retry com backoff** — cada requisição HLS tem timeout e até **3 tentativas**; segmento que falha de vez é reportado, não engolido.
-- **🖥️ Dashboard no terminal** — progresso em tempo real, por curso e por módulo, com ETA calculado pelo ritmo observado (biblioteca `rich`).
+- **🖥️ Dashboard no terminal** — progresso em tempo real, por curso e por módulo, com ETA calculado pelo ritmo observado (biblioteca `rich`). A barra anda por **faixas** (vídeo → áudio → conversão), então 100% significa pronto e só isso.
+- **❌ Erro diz de quê** — aula que falha guarda o motivo (`não achei o .m3u8`, `FFmpeg não converteu`, `token expirado?`) no painel **e** em `logs/erros.log`. `print` sozinho não serve: o painel repinta a tela em ~250 ms e o motivo some.
 - **🟢 Status do servidor** — o popup mostra se o servidor local está online.
 
 ---
@@ -152,30 +154,47 @@ Acompanhe o progresso no **dashboard do terminal**.
 $env:SIFAO_DOWNLOADS_SIMULTANEOS = 6 ; .\venv\Scripts\python.exe server\app.py
 ```
 
-O padrão é **4** — número **medido**, não chutado: 19,8% mais rápido que 1 e 2,5% mais rápido que 8, que ainda travou uma rodada. Metodologia e números em [`plan/benchmark-concorrencia.md`](plan/benchmark-concorrencia.md).
+O padrão é **4** — número **medido**, não chutado: 19,8% mais rápido que 1 e 2,5% mais rápido que 8, que ainda travou uma rodada. Metodologia e números em [`plan/feito/benchmark-concorrencia.md`](plan/feito/benchmark-concorrencia.md).
+
+> **Registro do projeto:** [`plan/`](plan/) guarda medições, decisões e pendências, separado em [`a-fazer/`](plan/a-fazer/) e [`feito/`](plan/feito/). O índice está em [`plan/README.md`](plan/README.md).
 
 ---
 
 ## 📂 Organização dos arquivos
 
-Mesma lógica em todas as fontes: `output/<Origem>/<Agrupador>/<Aula>`.
+Mesma lógica em todas as fontes: `output/<Origem>/<Agrupador>/<Aula>/`.
 
-**A regra da pasta por aula:** uma aula que gera **2 ou mais arquivos** (vídeo + texto + anexos) ganha uma pasta com o nome dela; uma aula com **um arquivo só** fica solta no módulo — pasta com um arquivo dentro é ruído.
+**Duas regras, e as duas existem por um motivo medido:**
+
+**1. Toda aula ganha pasta própria** — com 1 arquivo ou com 5.
+
+O lugar é função da **identidade** da aula; o conteúdo só decide *quais* arquivos existem, nunca *onde* ficam. Até a 4.1 a pasta só nascia a partir de 2 arquivos, o que amarrava o caminho ao conteúdo do pedido: com texto a aula ganhava pasta, sem texto o arquivo ficava solto. Resultado medido no uso real: o "já baixei?" procurava o `.mp4` num caminho que a própria regra tinha mudado e **rebaixava o curso inteiro**.
+
+**2. As pastas saem numeradas na ordem do curso** — `01 - `, `02 - `…
+
+No disco, nome ordena por caractere: sem número, `Dia 10` vem antes de `Dia 2`. E pior — no Bootcamp, a *primeira* aula do Dia 1 ("Wins do Mês 1") cairia em último. A ordem vem da posição no array `children` do Skool, que é a única fonte dela: não existe campo de ordenação na API.
 
 ```text
 output/
-├── AI Makers Club/                        ← comunidade Skool
-│   └── Bootcamp Mês 1/                    ← curso
-│       └── Dia 1/                         ← módulo
-│           ├── Boas-vindas.mp4            ← aula de um arquivo só: fica solta
-│           └── Montando o agente/         ← aula com 2+ arquivos: pasta própria
-│               ├── Montando o agente.mp4
-│               ├── Montando o agente.md   ← descrição + recursos da aula
-│               └── workflow.json          ← anexo
+├── AI Makers Club/                            ← comunidade Skool
+│   └── Bootcamp Mês 1/                        ← curso
+│       ├── 01 - Dia 1/                        ← módulo, na ordem do curso
+│       │   ├── 01 - Wins do Mês 1/            ← 1ª aula do módulo no Skool
+│       │   │   └── Wins do Mês 1.md           ← aula só de texto
+│       │   └── 02 - Montando o agente/
+│       │       ├── Montando o agente.mp4
+│       │       ├── Montando o agente.md       ← descrição + recursos da aula
+│       │       └── workflow.json              ← anexo
+│       └── 02 - Dia 2/
 └── YouTube/
-    └── Hashtag Treinamentos/              ← canal (via yt-dlp), só para link colado
-        └── Aula 1 - Criando agentes de IA.mp4
+    └── Hashtag Treinamentos/                  ← canal (via yt-dlp), só para link colado
+        └── Aula 1 - Criando agentes de IA/
+            └── Aula 1 - Criando agentes de IA.mp4
 ```
+
+Pedido **sem ordem conhecida** (link colado, Loom fora do Skool) grava sem número — o programa nunca inventa uma posição.
+
+> **Renumerar não custa download.** O servidor reconhece a pasta da aula com ou sem prefixo, então mandar "baixar todos os cursos" numa biblioteca já baixada **renumera tudo sem baixar um byte**. Vale também quando o curso é reordenado no Skool.
 
 > Já tem uma biblioteca no layout antigo? `python migrar_layout.py` mostra o que faria; `--executar` faz. Ele é idempotente e nunca sobrescreve.
 
@@ -206,7 +225,7 @@ São **dois tipos de teste** com propósitos diferentes:
 
 | | O que protege | Quando roda |
 |---|---|---|
-| **Suíte padrão** | Contra **nós** quebrarmos o código | Sempre. Fixtures congeladas, sem internet |
+| **Suíte padrão** | Contra **nós** quebrarmos o código | Sempre. **189 testes**, fixtures congeladas, sem internet |
 | **`-m rede`** | Contra o **Loom** mudar a página | Sob demanda. Precisa de internet |
 
 Uma fixture congelada fica verde para sempre mesmo se o Loom mudar o formato da página — projeto quebrado, suíte passando. **Se um teste `-m rede` falhar, não é bug — é manutenção:** o Loom mudou algo. Baixe o HTML novo e atualize a extração junto com a fixture em `tests/fixtures/loom_embed.html`.
@@ -229,18 +248,18 @@ Scripts na raiz do projeto, fora do servidor. **Os três simulam por padrão** �
 
 ## 🧩 Como funciona (resumo)
 
-1. **Extensão** → `POST localhost:5000/baixar` com `{url, folder, filename[, desc, resources, referer, anexos]}`. `url` vazia é caso válido: aula só de texto.
+1. **Extensão** → `POST localhost:5000/baixar` com `{url, folder, filename[, ordem, ordemTotal, desc, resources, referer, anexos]}`. `url` vazia é caso válido: aula só de texto; `ordem` ausente significa "não sei a posição" — e aí a pasta sai sem número.
 2. **Servidor** responde `200` na hora e joga o download num `ThreadPoolExecutor` (4 simultâneos por padrão).
 3. **O worker grava texto e anexos ANTES do vídeo** — em curso onde o anexo é o produto, ele não pode depender do vídeo dar certo.
 4. **Roteamento por URL:** YouTube, Vimeo e vídeo do Skool (Mux) → `yt-dlp`; Loom/embed → extrai o `.m3u8` e baixa o HLS.
 5. **Loom (HLS):** escolhe a maior qualidade, baixa vídeo + áudio com 12 threads (timeout + 3 tentativas cada), funde com FFmpeg (`-c copy`).
-6. **Organização:** grava em `output/…` seguindo a estrutura de comunidade/curso/módulo, com pasta por aula quando há 2+ arquivos.
+6. **Organização:** grava em `output/…` seguindo comunidade/curso/módulo, **sempre** com pasta por aula, numerada na ordem do curso. Pasta que já existe vence o nome calculado — é isso que permite renumerar sem rebaixar nada.
 
 ---
 
 ## ⚠️ Limitações conhecidas
 
-- **Falha de segmento não vira erro:** cada fragmento HLS tem timeout e 3 tentativas com backoff, e o que falha de vez é contado e reportado — mas o vídeo é convertido mesmo assim e a aula ainda aparece como **sucesso** no dashboard. O aviso sai no terminal, e o painel do `rich` repinta a tela 4×/s por cima dele.
+- **Falha de segmento não vira erro:** cada fragmento HLS tem timeout e 3 tentativas com backoff, e o que falha de vez é contado e reportado — mas o vídeo é convertido mesmo assim e a aula ainda aparece como **sucesso** no dashboard. O aviso sai por `print`, e o painel do `rich` repinta a tela 4×/s por cima dele. *(Aulas que falham de vez **não** têm mais esse problema: o motivo vai para `logs/erros.log` e aparece no painel — ver abaixo.)*
 - **Limiar de 1 MB:** um `.mp4` truncado acima de 1 MB é considerado "completo" e não é rebaixado.
 - **Sem cancelamento:** depois de enfileirado, um download só para matando o processo (`Ctrl+C`).
 - **Token do Skool expira (~24h):** a extensão resolve o token no enfileiramento. Fila muito longa pode alcançar a expiração — o servidor detecta e diz o que fazer (reenfileirar o curso; o que já baixou é pulado), mas não renova sozinho, porque ele não tem a sessão do Skool.

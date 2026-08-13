@@ -26,7 +26,7 @@ import os
 import requests
 
 from .ytdlp import baixar_com_ytdlp
-from .utils import limpar_nome_arquivo
+from .utils import cortar_preservando_extensao
 from .caminhos import PASTA_OUTPUT
 
 # O player do Skool serve o HLS por este host (Mux white-label).
@@ -88,33 +88,21 @@ def _diagnosticar(url):
 # Abaixo disto o "arquivo" quase certamente é uma página de erro, não o anexo.
 _ANEXO_MINIMO = 64
 
-# Teto do nome do anexo em disco. O caminho já carrega Comunidade/Curso/Módulo, e o
-# Windows corta em 260 — nome de arquivo longo demais estoura o limite e o download
-# falharia no fim, depois de já ter baixado os bytes.
-_MAX_NOME_ANEXO = 90
+# NOTA (12/08/2026): havia aqui um `_MAX_NOME_ANEXO = 90`, teto próprio do nome do
+# anexo. Ele virou letra morta quando `limpar_nome_arquivo` ganhou `LIMITE_NOME = 80`:
+# o corte de 80 acontecia ANTES e o 90 nunca chegava a valer. Dois tetos para a mesma
+# coisa só ficam de acordo até um dos dois mudar — o teto agora é só o de utils.py.
 
 
-def _nome_do_anexo(nome_aula, nome_arquivo):
-    """Monta `<Aula> - <arquivo.ext>`, preservando a extensão e cortando o excesso.
-
-    O prefixo com o nome da aula não é enfeite: num módulo com dezenas de aulas, dois
-    anexos podem se chamar igual e um sobrescreveria o outro em silêncio. Também deixa
-    óbvio a que aula cada arquivo pertence.
-    """
-    base, ext = os.path.splitext(limpar_nome_arquivo(nome_arquivo) or "anexo")
-    aula = limpar_nome_arquivo(nome_aula) or "aula"
-
-    # O orçamento é DIVIDIDO. Truncar só o arquivo não basta: com um título de aula
-    # muito longo, o piso do truncamento deixava o nome final estourar o teto
-    # (medido: 147 caracteres). Metade do espaço para a aula, o resto para o arquivo.
-    ext = ext[:12]
-    teto_aula = max(10, (_MAX_NOME_ANEXO - len(ext) - 3) // 2)
-    aula = aula[:teto_aula].rstrip()
-    disponivel = max(5, _MAX_NOME_ANEXO - len(ext) - len(aula) - 3)
-    return f"{aula} - {base[:disponivel].rstrip()}{ext}"
+# NOTA (12/08/2026): havia aqui um `_nome_do_anexo` que prefixava o anexo com o nome
+# da aula (`<Aula> - <arquivo.ext>`). Ele existia para um risco real: anexos SOLTOS no
+# módulo podiam colidir entre aulas vizinhas e um sobrescrevia o outro em silêncio.
+# Desde que toda aula ganhou pasta própria, dois anexos de aulas diferentes nunca
+# dividem o mesmo diretório, e o prefixo virou ramo morto — removido junto com o
+# parâmetro `prefixar`, que só tinha um chamador e sempre passava False.
 
 
-def baixar_anexos(anexos, pasta_relativa_destino, nome_aula, prefixar=True):
+def baixar_anexos(anexos, pasta_relativa_destino):
     """Baixa os arquivos anexos de uma aula. Devolve (baixados, falhas).
 
     As URLs já vêm assinadas pela extensão (só ela tem a sessão do Skool) e NÃO
@@ -136,10 +124,13 @@ def baixar_anexos(anexos, pasta_relativa_destino, nome_aula, prefixar=True):
             falhas += 1
             continue
 
-        # Dentro da pasta própria da aula o prefixo seria redundante — e o risco de
-        # colisão que ele evita só existe quando os anexos ficam soltos no módulo.
-        nome_final = _nome_do_anexo(nome_aula, nome) if prefixar \
-            else (limpar_nome_arquivo(nome) or "anexo")[:_MAX_NOME_ANEXO]
+        # O anexo mora na pasta da aula, então guarda o nome original. O teto ainda
+        # vale: o caminho já carrega Comunidade/Curso/Módulo/Aula e o Windows corta
+        # em 260 — um nome longo estouraria o limite DEPOIS de baixar os bytes.
+        #
+        # `cortar_preservando_extensao` e NÃO `limpar_nome_arquivo`: sem a extensão o
+        # Windows não abre o arquivo. Ver a regressão registrada em utils.py.
+        nome_final = cortar_preservando_extensao(nome)
         destino = os.path.join(pasta_abs, nome_final)
 
         # Retomada: anexo já baixado não é rebaixado (mesma política do .mp4).

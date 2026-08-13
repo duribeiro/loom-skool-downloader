@@ -94,6 +94,30 @@ function obterDadosDaPagina() {
 
 const SERVIDOR = 'http://localhost:5000/baixar';
 
+// CORPO DO PEDIDO, montado num lugar só.
+//
+// Havia três `JSON.stringify` de pill espalhados (Loom, Vimeo e vídeo do Skool) e
+// cada um mandava um conjunto diferente de campos: dois deles só {url, folder,
+// filename}, sem `desc`/`resources`. Por isso "baixar vídeo" nunca gerava .md.
+// Campo novo agora entra aqui e vale para os três de uma vez.
+//
+// `extras` vem por último de propósito: a URL e o `referer` são específicos de cada
+// origem, e o chamador pode sobrepor um campo quando tem um valor mais fresco.
+function corpoDoPedido(dados, extras) {
+    return JSON.stringify({
+        folder: dados.folder,
+        filename: dados.filename,
+        // Ordem da aula dentro do módulo. `null` quando não se sabe (link colado,
+        // Loom fora do Skool, ou curso cujo JSON não trouxe `children`) — e aí o
+        // servidor grava sem número em vez de inventar um.
+        ordem: dados.ordem || null,
+        ordemTotal: dados.ordemTotal || null,
+        desc: dados.desc || '',
+        resources: dados.resources || '',
+        ...extras,
+    });
+}
+
 function obterNextData() {
     // __NEXT_DATA__ é uma tag <script> no DOM — o content script alcança.
     const tag = document.getElementById('__NEXT_DATA__');
@@ -178,7 +202,49 @@ function coletarUnits(raiz) {
     return porId;
 }
 
-function caminhoDaAula(unit, porId) {
+// A ORDEM DO CURSO SÓ EXISTE NA POSIÇÃO DO ARRAY.
+//
+// MEDIDO em 12/08/2026, lendo o __NEXT_DATA__ de ai-makers ao vivo: a unit do Skool
+// tem `id, name, metadata, createdAt, updatedAt, unitType, rootId, userId, groupId,
+// state, public` e a metadata tem `coverImage, coverImageFile, desc, hasAccess,
+// numModules, privacy, title`. **Não existe campo de ordem.** A sequência vem de
+// `pageProps.course.children[]`, aninhado: módulos no primeiro nível, aulas no
+// segundo. Se essa posição se perder, a ordem não é recuperável de lugar nenhum.
+//
+// Por que isso importa: no disco as pastas ordenam alfabeticamente, e aí "Dia 10"
+// vem antes de "Dia 2". Pior: no Dia 1, a PRIMEIRA aula ("Wins do Mês 1") cai em
+// último. O curso tem sequência pedagógica e o disco a destrói.
+//
+// `coletarUnits` guarda tudo num dicionário por id e joga o array fora — por isso
+// esta função separada, que anda pelos `children` só para colher os índices.
+function ordemDasUnits(raiz) {
+    const mapa = {};
+    if (!raiz || !Array.isArray(raiz.children)) return mapa;
+
+    (function anda(no) {
+        const filhos = Array.isArray(no.children) ? no.children : [];
+        filhos.forEach((filho, i) => {
+            const u = filho && filho.course;
+            if (u && typeof u.id === 'string') {
+                mapa[u.id] = { ordem: i + 1, total: filhos.length };
+            }
+            if (filho) anda(filho);
+        });
+    })(raiz);
+
+    return mapa;
+}
+
+// `NN - `, com o padding calculado pelo TOTAL do nível.
+// Padding fixo é como o bug do "Dia 10 antes do Dia 2" volta: com 2 dígitos num
+// módulo de 100+ aulas, a 100ª ordenaria antes da 20ª.
+function prefixoDeOrdem(info) {
+    if (!info || !info.ordem) return '';
+    const largura = Math.max(2, String(info.total || info.ordem).length);
+    return String(info.ordem).padStart(largura, '0') + ' - ';
+}
+
+function caminhoDaAula(unit, porId, ordens) {
     // Sobe pela cadeia parentId: os 'set' viram Módulos; o 'course' vira Curso.
     const modulos = [];
     let curso = null;
@@ -187,7 +253,12 @@ function caminhoDaAula(unit, porId) {
     while (atual && guarda++ < 20) {
         const m = metaDe(atual) || {};
         if (atual.unitType === 'course') { curso = m.title; break; }
-        if (atual.unitType === 'set') modulos.unshift(m.title);
+        // O módulo já sai numerado: é a extensão que conhece a ordem, o servidor não.
+        // Sem `ordens` (fallback da varredura genérica), sai sem número — nunca
+        // inventamos posição.
+        if (atual.unitType === 'set') {
+            modulos.unshift(prefixoDeOrdem(ordens && ordens[atual.id]) + m.title);
+        }
         atual = porId[atual.parentId];
     }
     return { curso, modulos };
@@ -213,24 +284,18 @@ async function obterPagePropsDoCurso() {
     if (buildId && group && course) {
         // Inclui o md atual da URL quando houver: deixa o request idêntico ao que o
         // Skool faz ao abrir a aula (o mesmo já comprovado em buscarTextoDaAula).
-        // A árvore de aulas não depende do md — ele só marca o módulo selecionado.
+        // A árvore de aulas não depende do md, mas `pinnedPosts` depende — ele é da
+        // aula ABERTA.
+        //
+        // Delega a `buscarPagePropsDeCurso` em vez de repetir o fetch aqui: era a
+        // ÚNICA das três buscas que não seguia `__N_REDIRECT`, então um slug não
+        // canônico (ou uma URL sem `md`) devolvia o payload de redirect, `pp.course`
+        // não vinha, e a função caía no __NEXT_DATA__ — que a navegação SPA deixa
+        // velho. Com a delegação, corrigir o redirect num lugar corrige nos três.
         const mdAtual = new URLSearchParams(location.search).get('md');
-        let q = `group=${encodeURIComponent(group)}&course=${encodeURIComponent(course)}`;
-        if (mdAtual) q += `&md=${encodeURIComponent(mdAtual)}`;
-        const url = `${location.origin}/_next/data/${buildId}/${group}/classroom/${course}.json?${q}`;
-        try {
-            const r = await fetch(url, { credentials: 'include', headers: { 'x-nextjs-data': '1' } });
-            if (r.ok) {
-                const json = await r.json();
-                const pp = json.pageProps || (json.props && json.props.pageProps);
-                if (pp && pp.course) return pp;
-                console.warn('[Loom] JSON fresco do curso sem pageProps.course; tentando cache local.');
-            } else {
-                console.warn(`[Loom] _next/data ${r.status} ao buscar curso atual; tentando cache local.`);
-            }
-        } catch (e) {
-            console.warn('[Loom] falha ao buscar curso fresco; tentando cache local:', e);
-        }
+        const pp = await buscarPagePropsDeCurso(course, buildId, group, mdAtual);
+        if (pp && pp.course) return pp;
+        console.warn('[Loom] JSON fresco do curso indisponível; tentando cache local.');
     }
     // Fallback: só confia no __NEXT_DATA__ se ele for COMPROVADAMENTE do curso ATUAL
     // (o slug `name` bate com o da URL). Se não bater — ou não houver slug na URL — o
@@ -270,6 +335,18 @@ function extrairAulas(pp) {
     const comunidade = (cg.metadata && cg.metadata.displayName) || cg.name || 'Skool';
     const porId = coletarUnits(pp.course);
 
+    // A ordem vem do array `children`; `coletarUnits` (dicionário por id) a descarta.
+    //
+    // As duas travessias convivem de propósito. A genérica é resistente a o Skool
+    // mudar o aninhamento — foi ela que sobreviveu a cada mudança até aqui. Ler
+    // `children` nos acopla a esse formato, então ela entra só para a ordem, e a
+    // ausência dela AVISA em vez de sumir calada (o padrão de falha desta base).
+    const ordens = ordemDasUnits(pp.course);
+    if (!Object.keys(ordens).length) {
+        console.warn('[Sifão] sem `children` no JSON do curso: as pastas sairão SEM ' +
+                     'numeração e a ordem do curso não será preservada no disco.');
+    }
+
     // Diagnóstico: quantos units de cada unitType existem. Se uma aula "não baixa",
     // isto revela na hora se ela era de um tipo que estávamos descartando.
     const porTipo = {};
@@ -282,7 +359,37 @@ function extrairAulas(pp) {
         // Todo o resto é folha e ENTRA, seja qual for o unitType: assim uma aula
         // de texto (unitType diferente de 'module') não some em silêncio.
         if (CONTAINERS.has(unit.unitType)) continue;
+        aulas.push(pacoteDaAula(unit, porId, comunidade, ordens));
+    }
 
+    // DIAGNÓSTICO POR MÓDULO — não é enfeite.
+    //
+    // Em 12/08/2026 um módulo inteiro ("Dia 1" do Bootcamp Mês 1) foi apagado de
+    // propósito e NÃO voltou no "baixar tudo". Zero arquivos escritos, e o painel
+    // agrupa por CURSO — então não havia como saber se o módulo tinha sido coletado
+    // e não enviado, ou nem coletado. A contagem por módulo separa os dois casos em
+    // uma olhada, sem precisar instrumentar de novo depois do problema aparecer.
+    const porModulo = {};
+    for (const a of aulas) {
+        const modulo = a.folder.split('/').slice(-1)[0] || '(sem modulo)';
+        porModulo[modulo] = (porModulo[modulo] || 0) + 1;
+    }
+    console.log(`[Sifão] coletadas ${aulas.length} aulas em ${Object.keys(porModulo).length} módulos:`,
+                porModulo);
+
+    return aulas;
+}
+
+// FONTE ÚNICA do pedido de uma aula: pasta, nome, texto e marcas de vídeo.
+//
+// Os TRÊS botões (comunidade inteira, curso único e o pill sobre o player) passam
+// por aqui. Antes só os dois primeiros passavam: o pill montava a pasta parseando o
+// `document.title` em `obterDadosDaPagina` (:15), que produz apenas
+// `Comunidade/Curso` — SEM o nível do módulo — e postava só {url, folder, filename},
+// nunca `desc`/`resources`. Resultado medido: "baixar vídeo" jamais gerava .md, e
+// gravava num caminho diferente do que os outros dois botões usariam para a MESMA
+// aula. Duas fontes de verdade para a mesma pasta divergem por construção.
+function pacoteDaAula(unit, porId, comunidade, ordens) {
         const meta = metaDe(unit) || {};
         const videoLink = meta.videoLink || '';
         const ehLoom = /loom\.com\/(embed|share)\//.test(videoLink);
@@ -315,16 +422,23 @@ function extrairAulas(pp) {
         // suma sem aviso. Só aulas com vídeo de OUTRA plataforma (YouTube etc.)
         // seguem sem o .mp4 — mas o texto/registro ainda vai.
 
-        const { curso, modulos } = caminhoDaAula(unit, porId);
+        const { curso, modulos } = caminhoDaAula(unit, porId, ordens);
         const pasta = [comunidade, curso, ...modulos]
             .filter(Boolean)
             .map(limparTexto)
             .join('/');
 
-        aulas.push({
+        // A ordem da AULA vai separada, não colada no nome: quem monta a pasta dela
+        // é o servidor (`worker_download`), que precisa do nome limpo para achar a
+        // pasta já existente — numerada ou não (`_pasta_existente_da_aula`).
+        const minhaOrdem = (ordens && ordens[unit.id]) || null;
+
+        return {
             url: ehLink ? videoLink : '',   // do Skool, a URL só nasce na fase 1
             folder: pasta,
             filename: limparTexto(meta.title || 'Aula sem titulo'),
+            ordem: minhaOrdem ? minhaOrdem.ordem : null,
+            ordemTotal: minhaOrdem ? minhaOrdem.total : null,
             desc: desc,
             resources: resources,
             _videoId: videoIdSkool,
@@ -332,9 +446,7 @@ function extrairAulas(pp) {
             _temTexto: temTexto,
             _unitType: unit.unitType,
             _id: unit.id,   // = o "md" da aula; usado para buscar o texto individual
-        });
-    }
-    return aulas;
+        };
 }
 
 // --- 1.6. TEXTO POR AULA (via endpoint de dados do Next.js do Skool) ---
@@ -446,7 +558,46 @@ async function buscarTextoDaAula(md, ctx, videoId) {
         const r = await fetch(url, { credentials: 'include', headers: { 'x-nextjs-data': '1' } });
         if (!r.ok) { console.warn(`[Loom] _next/data ${r.status} para md ${md}`); return { desc: '', resources: '' }; }
         const json = await r.json();
-        const pp = json.pageProps || (json.props && json.props.pageProps);
+        let pp = json.pageProps || (json.props && json.props.pageProps);
+
+        // __N_REDIRECT: o Skool responde 200 com um PAYLOAD DE REDIRECT quando o
+        // slug do curso não é o canônico (o UUID longo de `allCourses` redireciona
+        // para um slug curto). Sem seguir, `pp` vem só com o redirect, o texto
+        // volta VAZIO e a aula perde o .md — e sem .md o servidor prevê 1 arquivo,
+        // não cria a pasta da aula, procura o .mp4 no lugar errado e rebaixa tudo.
+        // MEDIDO em 12/08/2026: /classroom/c385f0c5….json -> /classroom/1d46e489?md=…
+        //
+        // O `md` PEDIDO tem que ser preservado: o redirect traz o md da aula PADRÃO
+        // do curso, e reaproveitá-lo devolve o texto da aula ERRADA.
+        //
+        // A QUERY É REMONTADA com o slug canônico. Antes o `q` era reaproveitado
+        // inteiro, e ele carrega `course=<slug antigo>` — o mesmo slug que acabou de
+        // redirecionar. O servidor lê esse parâmetro, então a releitura redirecionava
+        // de novo, os 2 saltos se esgotavam e `extrairTextoParaMd` devolvia texto
+        // VAZIO **sem um único aviso** — exatamente a falha silenciosa que este bloco
+        // veio consertar.
+        let salto = 0;
+        for (; pp && pp.__N_REDIRECT && salto < 2; salto++) {
+            const alvo = String(pp.__N_REDIRECT).match(/classroom\/([^?]+)/);
+            if (!alvo) break;
+            const slugCanonico = alvo[1];
+            const qCanonico = `group=${encodeURIComponent(ctx.group)}` +
+                `&course=${encodeURIComponent(slugCanonico)}` +
+                `&md=${encodeURIComponent(md)}`;
+            const rr = await fetch(
+                `${location.origin}/_next/data/${ctx.buildId}/${ctx.group}/classroom/${slugCanonico}.json?${qCanonico}`,
+                { credentials: 'include', headers: { 'x-nextjs-data': '1' } });
+            if (!rr.ok) {
+                console.warn(`[Sifão] aula ${md}: HTTP ${rr.status} ao seguir o redirect`);
+                break;
+            }
+            const jj = await rr.json();
+            pp = jj.pageProps || (jj.props && jj.props.pageProps);
+        }
+        // Desistir calado é o pior dos mundos: a aula fica sem .md e ninguém sabe.
+        if (pp && pp.__N_REDIRECT) {
+            console.warn(`[Sifão] aula ${md}: redirects demais (${salto}); texto ficará vazio`);
+        }
         const out = extrairTextoParaMd(pp, md);
         // Mesma resposta, nenhum request a mais: o vídeo do Skool vem daqui.
         out.urlVideo = extrairVideoSkool(pp, videoId);
@@ -614,12 +765,8 @@ async function enfileirarCurso(aulas, ctx, aoProgredir) {
             await fetch(SERVIDOR, {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify({
+                body: corpoDoPedido(aula, {
                     url: aula.url,
-                    folder: aula.folder,
-                    filename: aula.filename,
-                    desc: aula.desc,
-                    resources: aula.resources,
                     anexos: aula.anexos || [],
                 }),
             });
@@ -654,15 +801,20 @@ function ehPaginaComunidade() {
     return !!group && !course && /\/classroom\/?$/.test(location.pathname);
 }
 
-async function buscarPagePropsDeCurso(slug, buildId, group) {
+async function buscarPagePropsDeCurso(slug, buildId, group, mdInicial) {
     // MEDIDO: pedir o curso sem `md` NÃO devolve o curso. O Skool responde 200 com um
     // corpo de redirect — {"pageProps":{"__N_REDIRECT":"...?md=<primeira aula>"}} —
     // porque a rota do curso sempre aponta para uma aula. Só relendo com esse `md` é
     // que vem pageProps.course. (Dentro de um curso isso nunca aparecia: a URL já
     // trazia o md.) Seguimos o salto no máximo 2× para não girar em falso.
+    //
+    // `mdInicial` serve ao caminho do curso ABERTO, que já sabe o md pela URL: além
+    // de evitar o salto, ele MUDA a resposta — `pinnedPosts` pertence à aula aberta,
+    // não ao curso. Sem passar o md, o pill perderia o vídeo que mora em post fixado.
     if (!slug || !buildId || !group) return null;
     const base = `${location.origin}/_next/data/${buildId}/${group}/classroom/${slug}.json`;
     let q = `group=${encodeURIComponent(group)}&course=${encodeURIComponent(slug)}`;
+    if (mdInicial) q += `&md=${encodeURIComponent(mdInicial)}`;
 
     for (let salto = 0; salto < 3; salto++) {
         try {
@@ -676,8 +828,27 @@ async function buscarPagePropsDeCurso(slug, buildId, group) {
             if (pp && pp.__N_REDIRECT) {
                 const md = new URL(pp.__N_REDIRECT, location.origin).searchParams.get('md');
                 if (!md) { console.warn(`[Sifão] curso ${slug}: redirect sem md`); return null; }
+
+                // O `md` PEDIDO manda mais que o do redirect, quando houve um.
+                //
+                // O redirect aponta para a aula PADRÃO do curso, e `pinnedPosts`
+                // pertence à aula ABERTA — trocar o md aqui faria o pill ler os posts
+                // fixados de outra aula e enfileirar o vídeo dela com o nome desta.
+                // É o "vídeo errado colado na aula" que as checagens de
+                // `id === videoId` existem para impedir.
+                //
+                // Só usamos o md do redirect quando não havia um pedido (o caminho da
+                // comunidade, que busca o curso sem saber a aula).
+                const mdEfetivo = mdInicial || md;
                 q = `group=${encodeURIComponent(group)}&course=${encodeURIComponent(slug)}` +
-                    `&md=${encodeURIComponent(md)}`;
+                    `&md=${encodeURIComponent(mdEfetivo)}`;
+
+                // Se o md pedido já estava na query e mesmo assim veio redirect,
+                // repetir a mesma query giraria em falso até esgotar os saltos.
+                if (mdInicial && salto > 0) {
+                    console.warn(`[Sifão] curso ${slug}: redirect insistente com md=${mdInicial}`);
+                    return null;
+                }
                 continue;
             }
             if (pp && pp.course) return pp;
@@ -816,6 +987,42 @@ async function enfileirarComunidadeDaAba(aoProgredir) {
 // Fábrica do pill: mesmo visual em Loom e Vimeo (o youtube.js tem a sua, idêntica).
 // O ícone vem do ui.css (.sf-pill__ico); o texto fica num span para trocar o
 // rótulo/estado sem perder o ícone. `fixo` = canto da tela; senão overlay no vídeo.
+// --- O PILL PERTENCE A UMA AULA ---
+//
+// RISCO REPRODUZIDO em 13/08/2026: numa aula cujo vídeo mora em post fixado não há
+// player na página, e o pill é anexado ao `document.body` — que SOBREVIVE à
+// navegação SPA do Skool. Marcando o pill da aula #2 e navegando para a #1 sem F5:
+//
+//     qtdPills : 1
+//     marcas   : ["PILL-DA-AULA-8a182e0c"]   <- o pill da aula #2, na tela da #1
+//
+// E a guarda `if (document.getElementById(...)) return;` impedia a criação do pill
+// certo. O clique então resolvia o vídeo da aula ANTERIOR, enquanto o nome e a pasta
+// vinham da aula ATUAL: arquivo com o nome certo e o conteúdo errado — o pior tipo
+// de defeito, porque não parece defeito.
+//
+// Não é canto raro: 12 das 20 aulas de Founders Talk e 37 das 85 de Office Hours
+// não têm player próprio.
+
+function _mdAtual() {
+    return new URLSearchParams(location.search).get('md') || '';
+}
+
+function pillDaAulaAtual(id) {
+    /** Devolve o pill SE ele for desta aula. Se for de outra, remove e devolve null. */
+    const existente = document.getElementById(id);
+    if (!existente) return null;
+    if (existente.dataset.md === _mdAtual()) return existente;
+    existente.remove();
+    return null;
+}
+
+function marcarPillComAula(btn) {
+    btn.dataset.md = _mdAtual();
+    return btn;
+}
+
+
 function criarPill(rotulo, fixo) {
     const btn = document.createElement('button');
     btn.className = 'sf-pill ' + (fixo ? 'sf-pill--fixed' : 'sf-pill--overlay');
@@ -845,10 +1052,11 @@ async function dadosDaAulaAtual() {
     if (!unit) return null;
     const cg = pp.currentGroup || {};
     const comunidade = (cg.metadata && cg.metadata.displayName) || cg.name || 'Skool';
-    const meta = metaDe(unit) || {};
-    const { curso, modulos } = caminhoDaAula(unit, porId);
-    const pasta = [comunidade, curso, ...modulos].filter(Boolean).map(limparTexto).join('/');
-    return { folder: pasta, filename: limparTexto(meta.title || 'Aula sem titulo') };
+
+    // MESMA função que os outros dois botões usam. Vem com `desc`/`resources` e
+    // com a ORDEM junto, e é isso que faz o pill gerar o .md e cair na mesma pasta
+    // numerada — antes ele postava só {url, folder, filename}.
+    return pacoteDaAula(unit, porId, comunidade, ordemDasUnits(pp.course));
 }
 
 function criarBotaoDownload(iframe) {
@@ -877,7 +1085,7 @@ function criarBotaoDownload(iframe) {
         fetch(SERVIDOR, {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ url: urlEmbed, folder: dados.folder, filename: dados.filename }),
+            body: corpoDoPedido(dados, { url: urlEmbed }),
         })
         .then(r => r.json())
         .then(() => { btn._lab.textContent = 'Na fila'; })
@@ -994,7 +1202,7 @@ function criarBotaoVimeo() {
     // Se o botão já existe e nasceu no canto (o iframe do Vimeo carregou DEPOIS, pois
     // o id foi detectado pela Performance API antes do iframe entrar no DOM),
     // reancora sobre o vídeo assim que o iframe aparecer.
-    const existente = document.getElementById('sf-vimeo');
+    const existente = pillDaAulaAtual('sf-vimeo');
     if (existente) {
         if (iframe && existente.classList.contains('sf-pill--fixed')) ancorarPillNoIframe(existente, iframe);
         return;
@@ -1002,6 +1210,7 @@ function criarBotaoVimeo() {
 
     const btn = criarPill('Baixar vídeo', !iframe);   // overlay se já há iframe; senão canto
     btn.id = 'sf-vimeo';
+    marcarPillComAula(btn);
 
     btn.onclick = async () => {
         if (btn.disabled) return;
@@ -1012,10 +1221,8 @@ function criarBotaoVimeo() {
             const resp = await fetch(SERVIDOR, {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify({
+                body: corpoDoPedido(dados, {
                     url: `https://player.vimeo.com/video/${id}`,
-                    folder: dados.folder,
-                    filename: dados.filename,
                     referer: location.href,   // libera o Vimeo restrito por domínio
                 }),
             });
@@ -1081,10 +1288,10 @@ function criarBotaoLoomNativo() {
             const resp = await fetch(SERVIDOR, {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify({
+                // Loom fora do Skool: não há aula, então não há `desc` nem módulo.
+                // Passa pela mesma função só para o corpo ter sempre o mesmo formato.
+                body: corpoDoPedido({ folder: 'Loom', filename: titulo }, {
                     url: `https://www.loom.com/embed/${id}`,   // mesmo caminho do embed no Skool
-                    folder: 'Loom',
-                    filename: titulo,
                 }),
             });
             await resp.json();
@@ -1110,6 +1317,8 @@ function criarBotaoLoomNativo() {
 // Aqui detectamos a aula aberta e ancoramos o pill sobre o player.
 
 let _skoolVideoTentado = '';   // md já processado, para o observador não refazer fetch
+const _skoolTentativas = new Map();   // md -> quantas vezes tentamos resolver o vídeo
+const _MAX_TENTATIVAS_SKOOL = 3;      // depois disso, avisa e para (evita enxurrada)
 
 function acharPlayerSkool() {
     // MEDIDO: antes do play não existe <video> NEM <img> — a thumbnail do Mux entra
@@ -1146,13 +1355,32 @@ async function criarBotaoVideoSkool() {
     const md = new URLSearchParams(location.search).get('md');
     if (!md || !/\/classroom\//.test(location.pathname)) return;
     if (_skoolVideoTentado === md) return;        // já resolvido/descartado nesta aula
-    if (document.getElementById('sf-skool')) return;
+    if (pillDaAulaAtual('sf-skool')) return;
 
     _skoolVideoTentado = md;                      // marca ANTES do await: o observador
                                                   // dispara muitas vezes por segundo e
                                                   // sem isto viraria enxurrada de fetch.
     const pp = await obterPagePropsDoCurso();
-    if (!pp || !pp.course) return;
+    if (!pp || !pp.course) {
+        // FALHA PASSAGEIRA MERECE OUTRA CHANCE.
+        //
+        // A marca acima existe para conter a enxurrada de fetch do observador, mas
+        // ela também trancava a aula: um `obterPagePropsDoCurso` que falhasse UMA vez
+        // (rede oscilando, JSON ainda não pronto na troca de aula) deixava a aula sem
+        // botão até um F5 — e o usuário não tem como saber que foi isso.
+        //
+        // Liberar sem limite viraria a enxurrada de volta, então o número de
+        // tentativas é contado por aula.
+        const tentativas = (_skoolTentativas.get(md) || 0) + 1;
+        _skoolTentativas.set(md, tentativas);
+        if (tentativas < _MAX_TENTATIVAS_SKOOL) {
+            _skoolVideoTentado = '';
+        } else {
+            console.warn(`[Sifão] desisti de resolver o vídeo da aula ${md} após ` +
+                         `${tentativas} tentativas; recarregue a página (F5).`);
+        }
+        return;
+    }
     const unit = coletarUnits(pp.course)[md];
     if (!unit) return;
     const meta = metaDe(unit) || {};
@@ -1168,10 +1396,11 @@ async function criarBotaoVideoSkool() {
     const pins = meta.videoId ? [] : postsFixadosComVideo(pp);
     if (!meta.videoId && !pins.length) return;    // sem vídeo em lugar nenhum
 
-    if (document.getElementById('sf-skool')) return;
+    if (pillDaAulaAtual('sf-skool')) return;
     const alvo = acharPlayerSkool();
     const btn = criarPill('Baixar vídeo', !alvo);   // sem player achado, vai pro canto
     btn.id = 'sf-skool';
+    marcarPillComAula(btn);
 
     btn.onclick = async () => {
         if (btn.disabled) return;
@@ -1208,12 +1437,13 @@ async function criarBotaoVideoSkool() {
             const r = await fetch(SERVIDOR, {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify({
+                // O texto resolvido no clique (`t`) é mais fresco que o do pacote,
+                // mas só sobrepõe quando veio preenchido — senão apagaria o que o
+                // `pacoteDaAula` já trouxe.
+                body: corpoDoPedido(dados, {
                     url: t.urlVideo,
-                    folder: dados.folder,
-                    filename: dados.filename,
-                    desc: t.desc || '',
-                    resources: t.resources || '',
+                    ...(t.desc ? { desc: t.desc } : {}),
+                    ...(t.resources ? { resources: t.resources } : {}),
                 }),
             });
             await r.json();
