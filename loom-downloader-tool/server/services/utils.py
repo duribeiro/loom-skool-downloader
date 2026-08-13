@@ -50,6 +50,23 @@ def limpar_nome_arquivo(nome):
     # Remove espaços duplos e espaços nas pontas
     nome = " ".join(nome.split())
 
+    # PONTO OU ESPAÇO NO FIM NÃO EXISTEM NO WINDOWS — e cada camada "conserta" de um
+    # jeito diferente, o que parte a pasta em três.
+    #
+    # MEDIDO em 13/08/2026, com a aula "#12 De 597 a 10 mil reais em 6 meses, por
+    # Luis F." (repare no ponto do fim):
+    #
+    #     nosso nome       -> '... por Luis F.'
+    #     Windows cria     -> '... por Luis F'     (corta o ponto, calado)
+    #     yt-dlp sanitiza  -> '... por Luis F#'    (troca o ponto por '#')
+    #
+    # Resultado real: o yt-dlp baixou 161 MB em `...F#/`, nosso código foi procurar o
+    # .mp4 em `...F./` (que o Windows resolve como `...F/`, vazia), não achou, e o
+    # temporário `._yt_*` ficou órfão. Duas aulas, 349,8 MB parados.
+    #
+    # Cortar aqui faz o nome ser o mesmo em todas as camadas. Não é cosmético.
+    nome = nome.rstrip(". ")
+
     # Corta no limite, sem deixar espaço solto na ponta. O corte é DETERMINÍSTICO:
     # o mesmo título sempre vira o mesmo nome, então "já baixei?" continua achando
     # o arquivo de uma execução anterior.

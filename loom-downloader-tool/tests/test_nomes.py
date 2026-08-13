@@ -97,3 +97,42 @@ def test_extensao_composta_sobrevive():
 def test_nome_vazio_vira_anexo():
     assert cortar_preservando_extensao("") == "anexo"
     assert cortar_preservando_extensao(None) == "anexo"
+
+
+# --- PONTO/ESPAÇO NO FIM: três camadas normalizando diferente ---
+# MEDIDO em 13/08/2026 com a aula "#12 ... por Luis F." (ponto no fim):
+#   nosso nome -> '...F.'   |  Windows cria -> '...F'  |  yt-dlp -> '...F#'
+# O yt-dlp baixou 161 MB em `F#/`, o código procurou em `F./` e o temporário ficou
+# órfão. Duas aulas, 349,8 MB parados em disco.
+
+def test_ponto_no_fim_e_removido():
+    assert limpar_nome_arquivo("por Luis F.") == "por Luis F"
+    assert limpar_nome_arquivo("Bem-vindo.") == "Bem-vindo"
+
+
+def test_espaco_no_fim_e_removido():
+    assert limpar_nome_arquivo("Aula   ") == "Aula"
+
+
+def test_ponto_no_meio_sobrevive():
+    # Só o do FIM é problema; ponto no meio é parte do título.
+    assert limpar_nome_arquivo("Aula 1.5 - Intro") == "Aula 1.5 - Intro"
+
+
+def test_nome_so_de_pontos_nao_vira_vazio():
+    assert limpar_nome_arquivo("...") == "sem_titulo"
+
+
+def test_nosso_nome_sobrevive_ao_sanitize_do_ytdlp():
+    """A propriedade que importa: o yt-dlp não pode MUDAR o nome que escolhemos.
+
+    Se ele mudar, baixa numa pasta e o servidor procura noutra — exatamente o que
+    deixou 349,8 MB órfãos.
+    """
+    from yt_dlp.utils import sanitize_path
+
+    for bruto in ("por Luis F.", "Erick C.", "Bem-vindo.", "Aula   ",
+                  "Aula normal", "Aula 1.5 - Intro"):
+        nosso = limpar_nome_arquivo(bruto)
+        assert sanitize_path(nosso) == nosso, \
+            f"yt-dlp reescreveria {nosso!r} como {sanitize_path(nosso)!r}"
