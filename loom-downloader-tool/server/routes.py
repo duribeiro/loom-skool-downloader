@@ -30,8 +30,12 @@ from services import (
     titulo_do_vimeo,
     baixar_skool,
     eh_url_skool_video,
+    baixar_loom,
+    eh_url_loom,
+    titulo_do_loom,
     baixar_anexos,
     registrar_erro,
+    limpar_erro,
     PASTA_TEMP_RAIZ
 )
 
@@ -363,6 +367,13 @@ def worker_download(url, pasta_destino, nome_arquivo_sugerido, item_dashboard,
             # Na prática a extensão sempre manda o nome da aula, então isto é só
             # uma rede de segurança para não cair no extrator do Loom e voltar lixo.
             nome_arquivo_sugerido = "Aula do Skool"
+        elif eh_url_loom(url):
+            # Mesma fonte que baixa o vídeo. Antes o título saía de
+            # `extrair_metadados` (scraping do __APOLLO_STATE__) enquanto o download
+            # ia por outro caminho — duas mecânicas para o mesmo vídeo divergem por
+            # construção, e é o scraping que já quebrou uma vez, quando o Loom
+            # renomeou `playlist.m3u8`.
+            nome_arquivo_sugerido = titulo_do_loom(url)
         else:
             titulo_extraido, _ = extrair_metadados(url)
             nome_arquivo_sugerido = titulo_extraido
@@ -600,6 +611,7 @@ def worker_download(url, pasta_destino, nome_arquivo_sugerido, item_dashboard,
                                 or item_dashboard.get('anexos'))
         if sucesso_operacao:
             item_dashboard['status'] = 'sucesso'
+            limpar_erro(nome_limpo, pasta_destino)
         else:
             _marcar_erro(item_dashboard, nome_limpo, pasta_destino,
                          "aula sem vídeo não gerou nem .md nem anexo")
@@ -630,6 +642,21 @@ def worker_download(url, pasta_destino, nome_arquivo_sugerido, item_dashboard,
             # O token do Skool dura ~24h e uma fila longa alcança a expiração;
             # `_diagnosticar` (skool.py) já separa isso de erro genérico.
             motivo_falha = "vídeo do Skool não baixou (token expirado? reenfileire o curso)"
+    elif eh_url_loom(url):
+        # Loom pelo yt-dlp, e não pelo motor HLS próprio (`processar_download`).
+        #
+        # MEDIDO em 14/08/2026 (NoeAI Automator): a assinatura do master do Loom é
+        # escopada ao ARQUIVO — a policy diz `"Resource": ".../<id>.m3u8"` —, e o
+        # motor próprio reaproveita essa query para buscar `-video0.m3u8` e
+        # `-audio0.m3u8`. Os dois respondem 403 AccessDenied. 53 aulas falharam
+        # assim, nas duas tentativas, sempre as mesmas. O yt-dlp pede as URLs
+        # assinadas à GraphQL do Loom em vez de adivinhá-las.
+        #
+        # No vídeo em que os dois funcionam, empatam em 1920x1080. Ver services/loom.py.
+        video_ok = baixar_loom(url, pasta_destino, nome_limpo, atualizar_progresso,
+                               ao_converter=marcar_convertendo, ao_fase=marcar_fase)
+        if not video_ok:
+            motivo_falha = "yt-dlp não baixou o Loom (vídeo removido ou sem acesso?)"
     else:
         # Loom (e afins via embed): extrai o .m3u8 e baixa o HLS.
         _, url_m3u8 = extrair_metadados(url)
@@ -667,30 +694,10 @@ def worker_download(url, pasta_destino, nome_arquivo_sugerido, item_dashboard,
     if video_ok:
         item_dashboard['status'] = 'sucesso'
         item_dashboard['progresso'] = item_dashboard['total']  # Garante barra 100%
+        # A aula deu certo: se ela estava no log de uma execução anterior, sai de lá.
+        # O log responde "o que está quebrado AGORA" — ver services/registro.py.
+        limpar_erro(nome_limpo, pasta_destino)
     else:
-        # AULA NENHUMA TERMINA COM A PASTA VAZIA.
-        #
-        # O `.md` é decidido lá em cima com `permitir_vazio=not url`: havendo URL de
-        # vídeo, uma aula sem texto não ganha `.md` — para não deixar arquivo
-        # redundante ao lado do `.mp4`. A regra vale enquanto o vídeo dá certo. Quando
-        # ele falha não há `.mp4` nenhum, e a decisão já foi tomada: sobra um diretório
-        # vazio, sem um byte que registre que a aula existe.
-        #
-        # MEDIDO em 14/08/2026 na NoeAI Automator: 8 das 53 aulas que falharam ficaram
-        # com `conteudo: []` — todas o módulo "07 - Command Library" inteiro. Do disco
-        # não dava para distinguir "aula sem texto" de "aula que o servidor perdeu".
-        #
-        # Agora o placeholder é gravado no ponto em que o resultado do vídeo JÁ é
-        # conhecido, que é o único lugar onde a decisão pode ser correta.
-        if not item_dashboard.get('tem_texto'):
-            try:
-                if salvar_aula_md(nome_limpo, pasta_destino, desc, resources,
-                                  permitir_vazio=True):
-                    item_dashboard['tem_texto'] = True
-            except Exception as erro:
-                print(f"⚠️  Não foi possível gravar o placeholder de '{nome_limpo}': "
-                      f"{type(erro).__name__}: {erro}")
-
         _marcar_erro(item_dashboard, nome_limpo, pasta_destino, motivo_falha)
         # Em caso de erro, limpamos a temp para não deixar lixo corrompido ocupando espaço
         limpar_pasta(caminho_pasta_temp)

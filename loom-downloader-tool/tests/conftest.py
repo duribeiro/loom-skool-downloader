@@ -51,6 +51,36 @@ def _log_de_erros_isolado(tmp_path, monkeypatch):
     monkeypatch.setattr(registro, "ARQUIVO_ERROS", str(tmp_path / "logs" / "erros.log"))
 
 
+@pytest.fixture(autouse=True)
+def _sem_rede_na_suite_rapida(request, monkeypatch):
+    """A suíte rápida não fala com a internet. Quem tentar, quebra AQUI.
+
+    MEDIDO em 14/08/2026: quando o Loom passou a ir por `baixar_loom`, três testes
+    continuaram dublando `processar_download` — que aquele caminho não usa mais.
+    Eles chamaram o yt-dlp DE VERDADE, tomaram 404 do host de fixture ("abc") e um
+    deles PASSOU por causa disso: esperava status 'erro' e o erro veio da rede, não
+    do que estava sob teste. Teste que acerta por acidente é pior que teste
+    faltando, porque ninguém vai olhar de novo.
+
+    Bloqueio no socket, e não em `requests`, para pegar também o yt-dlp, que tem
+    pilha de rede própria. Os testes marcados `rede` são liberados por desenho.
+    """
+    if request.node.get_closest_marker("rede"):
+        return
+
+    import socket
+
+    def recusar(*_a, **_k):
+        raise RuntimeError(
+            "teste da suíte rápida tentou usar a rede. Provavelmente um dublê está "
+            "no lugar errado — confira qual motor a URL do teste realmente aciona."
+        )
+
+    monkeypatch.setattr(socket.socket, "connect", recusar)
+    monkeypatch.setattr(socket.socket, "connect_ex", recusar)
+    monkeypatch.setattr(socket, "create_connection", recusar)
+
+
 def ler_fixture(nome):
     """Lê uma fixture congelada como texto."""
     with open(os.path.join(PASTA_FIXTURES, nome), encoding="utf-8") as arquivo:

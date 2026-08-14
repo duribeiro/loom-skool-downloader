@@ -61,8 +61,7 @@ def test_aula_video_mais_texto(output_isolado, monkeypatch):
     """Grava o .md e baixa o vídeo."""
     monkeypatch.setattr(routes, "extrair_metadados",
                         lambda url: ("titulo", "https://loom/x.m3u8"))
-    monkeypatch.setattr(routes, "processar_download",
-                        lambda *a, **k: (True, None))
+    monkeypatch.setattr(routes, "baixar_loom", lambda *a, **k: True)
     monkeypatch.setattr(routes, "converter_final", lambda *a, **k: True)
     monkeypatch.setattr(routes, "limpar_pasta", lambda *a, **k: None)
 
@@ -79,7 +78,7 @@ def test_aula_video_mais_texto(output_isolado, monkeypatch):
 def test_aula_so_video_nao_grava_md(output_isolado, monkeypatch):
     monkeypatch.setattr(routes, "extrair_metadados",
                         lambda url: ("titulo", "https://loom/x.m3u8"))
-    monkeypatch.setattr(routes, "processar_download", lambda *a, **k: (True, None))
+    monkeypatch.setattr(routes, "baixar_loom", lambda *a, **k: True)
     monkeypatch.setattr(routes, "converter_final", lambda *a, **k: True)
     monkeypatch.setattr(routes, "limpar_pasta", lambda *a, **k: None)
 
@@ -90,34 +89,40 @@ def test_aula_so_video_nao_grava_md(output_isolado, monkeypatch):
     assert item["status"] == "sucesso"
 
 
-def test_video_que_falha_sem_texto_nao_deixa_pasta_vazia(output_isolado, monkeypatch):
-    """A aula tem URL de vídeo e não tem texto. O vídeo falha.
+def test_aula_que_erra_e_depois_da_certo_sai_do_log(output_isolado, tmp_path, monkeypatch):
+    """O ciclo de vida do log, ponta a ponta.
 
-    A regra "aula com vídeo não ganha .md" existe para não deixar arquivo
-    redundante ao lado do .mp4 — e ela era aplicada ANTES de o vídeo responder.
-    Quando ele falhava não havia .mp4 nenhum, e sobrava um diretório vazio.
+    A aula falha (entra no log) e, na execução seguinte, dá certo (tem que SAIR).
+    Sem isso o log vira sedimento: em 14/08/2026 ele tinha 108 linhas sem que se
+    pudesse dizer quais ainda valiam.
 
-    MEDIDO em 14/08/2026 na NoeAI Automator: 8 das 53 aulas que falharam ficaram
-    com `conteudo: []`. Do disco não dava para distinguir "aula sem texto" de
-    "aula que o servidor perdeu".
+    Não se grava `.md` placeholder aqui de propósito — um arquivo que ninguém
+    substitui depois parece conteúdo e mente sobre a aula. Quem registra a falha
+    é o log, que sabe se desfazer.
     """
+    log = tmp_path / "logs" / "erros.log"
     monkeypatch.setattr(routes, "extrair_metadados",
                         lambda url: ("titulo", "https://loom/x.m3u8"))
-    monkeypatch.setattr(routes, "processar_download",
-                        lambda *a, **k: (False, "master.m3u8 sem faixa de áudio separada"))
     monkeypatch.setattr(routes, "limpar_pasta", lambda *a, **k: None)
 
+    # 1ª execução: o download desiste.
+    monkeypatch.setattr(routes, "baixar_loom", lambda *a, **k: False)
     item = _item(url="https://www.loom.com/embed/abc")
     routes.worker_download(item["url"], item["folder"], item["nome"], item, None, None)
 
-    pasta = output_isolado / "Com" / "Curso" / "Modulo" / "Aula 1"
-    assert pasta.is_dir(), "a pasta da aula nem chegou a existir"
-    assert list(pasta.iterdir()), "PASTA VAZIA: a aula sumiu sem deixar registro"
-
-    md = pasta / "Aula 1.md"
-    assert md.exists(), "sem vídeo e sem texto, tem que sobrar ao menos o placeholder"
-    assert "# Aula 1" in md.read_text(encoding="utf-8")
     assert item["status"] == "erro"
+    assert log.exists() and "Aula 1" in log.read_text(encoding="utf-8"), \
+        "a falha não chegou ao log"
+
+    # 2ª execução: agora o vídeo vem.
+    monkeypatch.setattr(routes, "baixar_loom", lambda *a, **k: True)
+    monkeypatch.setattr(routes, "converter_final", lambda *a, **k: True)
+    item2 = _item(url="https://www.loom.com/embed/abc")
+    routes.worker_download(item2["url"], item2["folder"], item2["nome"], item2, None, None)
+
+    assert item2["status"] == "sucesso"
+    assert "Aula 1" not in log.read_text(encoding="utf-8"), \
+        "a aula deu certo e continuou marcada como erro no log"
 
 
 def test_falha_do_motor_hls_registra_o_motivo_real(output_isolado, monkeypatch):
@@ -127,14 +132,18 @@ def test_falha_do_motor_hls_registra_o_motivo_real(output_isolado, monkeypatch):
     falha de segmento não chega a esse ramo, porque `processar_download`
     devolve sucesso mesmo com buracos. As 108 falhas da NoeAI Automator em
     14/08/2026 foram todas registradas com uma causa que não existia.
+
+    A URL NÃO é do Loom de propósito: desde 14/08/2026 o Loom vai por yt-dlp
+    (`baixar_loom`), e o motor HLS só atende o que não casa com nenhuma origem
+    conhecida — que é justamente o ramo sob teste aqui.
     """
     monkeypatch.setattr(routes, "extrair_metadados",
-                        lambda url: ("titulo", "https://loom/x.m3u8"))
+                        lambda url: ("titulo", "https://outro/x.m3u8"))
     monkeypatch.setattr(routes, "processar_download",
                         lambda *a, **k: (False, "master.m3u8 sem faixa de áudio separada"))
     monkeypatch.setattr(routes, "limpar_pasta", lambda *a, **k: None)
 
-    item = _item(url="https://www.loom.com/embed/abc")
+    item = _item(url="https://embed.exemplo.com/video/abc")
     routes.worker_download(item["url"], item["folder"], item["nome"], item, None, None)
 
     assert item["status"] == "erro"
@@ -148,8 +157,8 @@ def test_aula_youtube_roteia_para_ytdlp(output_isolado, monkeypatch):
     chamado = {"yt": False, "loom": False}
     monkeypatch.setattr(routes, "baixar_youtube",
                         lambda *a, **k: chamado.__setitem__("yt", True) or True)
-    monkeypatch.setattr(routes, "processar_download",
-                        lambda *a, **k: chamado.__setitem__("loom", True) or (True, None))
+    monkeypatch.setattr(routes, "baixar_loom",
+                        lambda *a, **k: chamado.__setitem__("loom", True) or True)
     monkeypatch.setattr(routes, "extrair_metadados", lambda url: ("t", "m3u8"))
     monkeypatch.setattr(routes, "converter_final", lambda *a, **k: True)
     monkeypatch.setattr(routes, "limpar_pasta", lambda *a, **k: None)
@@ -208,7 +217,7 @@ def test_aula_loom_nao_vai_para_ytdlp(output_isolado, monkeypatch):
     monkeypatch.setattr(routes, "baixar_youtube",
                         lambda *a, **k: pytest.fail("Loom não deve ir pro yt-dlp"))
     monkeypatch.setattr(routes, "extrair_metadados", lambda url: ("t", "m3u8"))
-    monkeypatch.setattr(routes, "processar_download", lambda *a, **k: (True, None))
+    monkeypatch.setattr(routes, "baixar_loom", lambda *a, **k: True)
     monkeypatch.setattr(routes, "converter_final", lambda *a, **k: True)
     monkeypatch.setattr(routes, "limpar_pasta", lambda *a, **k: None)
 
@@ -318,8 +327,8 @@ def test_pasta_existente_da_aula_manda_mais_que_a_previsao(output_isolado, monke
     monkeypatch.setattr(routes, "limpar_pasta", lambda *a, **k: None)
 
     destinos = []
-    monkeypatch.setattr(routes, "processar_download",
-                        lambda url, temp, nome, pasta_rel, cb=None: destinos.append(pasta_rel) or (True, None))
+    monkeypatch.setattr(routes, "baixar_loom",
+                        lambda url, pasta_rel, nome, cb=None, **k: destinos.append(pasta_rel) or True)
 
     # Execução anterior deixou a pasta da aula pronta.
     (tmp_path / "Com" / "Curso" / "Modulo" / "Aula 1").mkdir(parents=True)
@@ -437,7 +446,7 @@ def test_worker_grava_dentro_da_pasta_numerada(output_isolado, monkeypatch, tmp_
     monkeypatch.setattr(routes, "converter_final", lambda *a, **k: True)
     monkeypatch.setattr(routes, "limpar_pasta", lambda *a, **k: None)
 
-    monkeypatch.setattr(routes, "processar_download", lambda *a, **k: (True, None))
+    monkeypatch.setattr(routes, "baixar_loom", lambda *a, **k: True)
 
     numerada = tmp_path / "Com" / "Curso" / "Modulo" / "03 - Aula 1"
     numerada.mkdir(parents=True)
@@ -469,7 +478,7 @@ def test_pasta_sem_numero_e_renumerada_sem_baixar(output_isolado, monkeypatch, t
     monkeypatch.setattr(routes, "extrair_metadados", lambda url: ("t", "m3u8"))
     monkeypatch.setattr(routes, "converter_final", lambda *a, **k: True)
     monkeypatch.setattr(routes, "limpar_pasta", lambda *a, **k: None)
-    monkeypatch.setattr(routes, "processar_download", lambda *a, **k: (True, None))
+    monkeypatch.setattr(routes, "baixar_loom", lambda *a, **k: True)
 
     modulo = tmp_path / "Com" / "Curso" / "Modulo"
     antiga = modulo / "Aula 1"
@@ -509,7 +518,7 @@ def test_pedido_sem_ordem_nao_renumera(output_isolado, monkeypatch, tmp_path):
     monkeypatch.setattr(routes, "extrair_metadados", lambda url: ("t", "m3u8"))
     monkeypatch.setattr(routes, "converter_final", lambda *a, **k: True)
     monkeypatch.setattr(routes, "limpar_pasta", lambda *a, **k: None)
-    monkeypatch.setattr(routes, "processar_download", lambda *a, **k: (True, None))
+    monkeypatch.setattr(routes, "baixar_loom", lambda *a, **k: True)
 
     modulo = tmp_path / "Com" / "Curso" / "Modulo"
     (modulo / "Aula 1").mkdir(parents=True)
@@ -534,7 +543,7 @@ def test_modulo_tambem_e_renumerado_e_nada_rebaixa(output_isolado, monkeypatch, 
     monkeypatch.setattr(routes, "extrair_metadados", lambda url: ("t", "m3u8"))
     monkeypatch.setattr(routes, "converter_final", lambda *a, **k: True)
     monkeypatch.setattr(routes, "limpar_pasta", lambda *a, **k: None)
-    monkeypatch.setattr(routes, "processar_download", lambda *a, **k: (True, None))
+    monkeypatch.setattr(routes, "baixar_loom", lambda *a, **k: True)
 
     antiga = tmp_path / "Com" / "Curso" / "Dia 1" / "Aula 1"
     antiga.mkdir(parents=True)
@@ -567,13 +576,17 @@ def test_caminho_novo_e_criado_como_pedido(tmp_path, monkeypatch):
 
 
 def test_conversao_anda_depois_de_contar_segmentos(output_isolado, monkeypatch, tmp_path):
-    """A faixa da conversão (85→99) tem que valer TAMBÉM no caminho HLS do Loom.
+    """A faixa da conversão (85→99) tem que valer TAMBÉM no caminho HLS.
 
     PEGO NA REVISÃO (12/08/2026) e medido: ali `progresso` conta SEGMENTOS (0..N com
     `total` = N). Ao entrar na conversão, o `max(progresso, percentual)` comparava
     300 segmentos com 85 por cento e a barra congelava em 100% durante toda a
     conversão — a queixa original ("travada em 100% e não avança"), que estava dada
     como resolvida e nunca tinha valido neste caminho.
+
+    A URL era do Loom quando este teste nasceu. Desde 14/08/2026 o Loom vai por
+    yt-dlp e o motor HLS atende só o que não casa com origem conhecida — então a
+    URL mudou para continuar exercitando o mesmo ramo.
     """
     monkeypatch.setattr(routes, "PASTA_OUTPUT", str(tmp_path))
     monkeypatch.setattr(routes, "extrair_metadados", lambda url: ("t", "m3u8"))
@@ -596,7 +609,7 @@ def test_conversao_anda_depois_de_contar_segmentos(output_isolado, monkeypatch, 
     monkeypatch.setattr(routes, "processar_download", falso_download)
     monkeypatch.setattr(routes, "converter_final", falso_converter)
 
-    item = _item(url="https://www.loom.com/embed/abc")
+    item = _item(url="https://embed.exemplo.com/video/abc")
     routes.worker_download(item["url"], item["folder"], item["nome"], item, None, None)
 
     assert vistos == sorted(vistos), f"a barra andou para trás: {vistos}"
@@ -674,7 +687,7 @@ def test_workers_concorrentes_no_mesmo_modulo_nao_partem_a_pasta(tmp_path, monke
     monkeypatch.setattr(routes, "extrair_metadados", lambda url: ("t", "m3u8"))
     monkeypatch.setattr(routes, "converter_final", lambda *a, **k: True)
     monkeypatch.setattr(routes, "limpar_pasta", lambda *a, **k: None)
-    monkeypatch.setattr(routes, "processar_download", lambda *a, **k: (True, None))
+    monkeypatch.setattr(routes, "baixar_loom", lambda *a, **k: True)
 
     modulo = tmp_path / "Com" / "Curso" / "Dia 3"
     for nome in ("Monte sua proposta comercial", "Enviar 20 mensagens"):
