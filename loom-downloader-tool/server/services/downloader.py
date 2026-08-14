@@ -212,7 +212,16 @@ def processar_download(url_master, pasta_temp, nome, pasta_rel, callback_progres
     3. Identifica a melhor qualidade de vídeo e o áudio.
     4. Baixa todos os fragmentos (.ts) em paralelo.
 
-    Devolve True em sucesso, False se algo impediu o download.
+    Devolve `(ok, motivo)`: `(True, None)` em sucesso, `(False, "<motivo>")`
+    quando algo impediu o download.
+
+    O MOTIVO VIAJA JUNTO, não sai por `print`. MEDIDO em 14/08/2026: 108 falhas
+    da comunidade NoeAI Automator chegaram ao `erros.log` com o rótulo genérico
+    "download dos segmentos HLS falhou" — que é sempre FALSO, porque falha de
+    segmento não chega aqui (o retorno de sucesso lá embaixo é incondicional).
+    As quatro causas reais são distintas e pedem ações opostas, e a única pista
+    saía por `print`, que o dashboard repinta 4×/s por cima. 53 das 55 aulas
+    falharam nas duas tentativas sem que se pudesse dizer por quê.
     """
 
     # --- VERIFICAÇÃO DE EXISTÊNCIA (O "Pulo do Gato") 🐈 ---
@@ -225,14 +234,14 @@ def processar_download(url_master, pasta_temp, nome, pasta_rel, callback_progres
             print(f"⏩ DOWNLOAD PULADO: O arquivo já existe em: {caminho_final_previsto}")
             if callback_progresso:
                 callback_progresso(total=1)
-            return True
+            return True, None
 
     # --- PREPARAÇÃO ---
     os.makedirs(pasta_temp, exist_ok=True)
 
     texto_master = _baixar_texto(url_master, "o master.m3u8")
     if texto_master is None:
-        return False
+        return False, "não baixei o master.m3u8 (rede, bloqueio ou URL expirada)"
 
     base_url = url_master.rsplit("/", 1)[0] + "/"
     assinatura_url = urlparse(url_master).query  # tokens de segurança da URL
@@ -241,11 +250,12 @@ def processar_download(url_master, pasta_temp, nome, pasta_rel, callback_progres
     streams_video, uri_audio = _parsear_master(texto_master)
 
     if not streams_video:
-        print("❌ Nenhum stream de vídeo encontrado no master.m3u8.")
-        return False
+        return False, "master.m3u8 sem stream de vídeo"
     if not uri_audio:
-        print("❌ Nenhuma faixa de áudio encontrada no master.m3u8.")
-        return False
+        # Este motor EXIGE faixa de áudio SEPARADA. HLS com o áudio embutido na
+        # faixa de vídeo é variante legítima e cai aqui como se fosse erro — ver
+        # "Limitações conhecidas" no README antes de tratar isto como vídeo mudo.
+        return False, "master.m3u8 sem faixa de áudio separada"
 
     # Maior bandwidth = melhor qualidade.
     melhor_video_m3u8 = max(streams_video, key=lambda s: s[0])[1]
@@ -279,8 +289,8 @@ def processar_download(url_master, pasta_temp, nome, pasta_rel, callback_progres
     preparar_playlist(arquivo_audio_m3u8, "audio")
 
     if "video" not in arquivos_playlists or "audio" not in arquivos_playlists:
-        print("❌ Não foi possível preparar as playlists de vídeo e/ou áudio.")
-        return False
+        faltando = [t for t in ("video", "audio") if t not in arquivos_playlists]
+        return False, f"não baixei a playlist de {' e '.join(faltando)}"
 
     # --- SALVAR ARQUIVOS DE CONTROLE ---
     # O FFmpeg lê estes arquivos locais para juntar tudo depois.
@@ -305,4 +315,7 @@ def processar_download(url_master, pasta_temp, nome, pasta_rel, callback_progres
         print(f"⚠️  ATENÇÃO: {falhas} de {total} segmentos falharam em '{nome}'. "
               f"O vídeo pode ter trechos faltando.")
 
-    return True
+    # Segue devolvendo sucesso mesmo com buraco — limitação conhecida e
+    # deliberada (ver README). O que muda aqui é só que o motivo das falhas
+    # ANTERIORES a este ponto deixou de ser adivinhação.
+    return True, None

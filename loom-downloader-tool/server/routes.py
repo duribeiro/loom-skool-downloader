@@ -640,7 +640,7 @@ def worker_download(url, pasta_destino, nome_arquivo_sugerido, item_dashboard,
             # rede, e "conversão falhou" é FFmpeg. Um "erro" genérico não separava.
             motivo_falha = "não achei o .m3u8 na página do embed"
         else:
-            download_ok = processar_download(
+            download_ok, motivo_hls = processar_download(
                 url_m3u8,
                 caminho_pasta_temp,
                 nome_limpo,
@@ -649,7 +649,11 @@ def worker_download(url, pasta_destino, nome_arquivo_sugerido, item_dashboard,
             )
 
             if not download_ok:
-                motivo_falha = "download dos segmentos HLS falhou"
+                # O motivo vem de dentro do motor. O rótulo fixo que existia aqui
+                # ("download dos segmentos HLS falhou") era SEMPRE falso: falha de
+                # segmento nem chega a este ramo. Ele escondeu 108 falhas da NoeAI
+                # Automator em 14/08/2026 atrás de uma causa que não existia.
+                motivo_falha = motivo_hls or "o motor HLS desistiu sem dizer o motivo"
             else:
                 item_dashboard['status'] = 'convertendo'
                 if converter_final(nome_limpo, pasta_destino, caminho_pasta_temp,
@@ -664,6 +668,29 @@ def worker_download(url, pasta_destino, nome_arquivo_sugerido, item_dashboard,
         item_dashboard['status'] = 'sucesso'
         item_dashboard['progresso'] = item_dashboard['total']  # Garante barra 100%
     else:
+        # AULA NENHUMA TERMINA COM A PASTA VAZIA.
+        #
+        # O `.md` é decidido lá em cima com `permitir_vazio=not url`: havendo URL de
+        # vídeo, uma aula sem texto não ganha `.md` — para não deixar arquivo
+        # redundante ao lado do `.mp4`. A regra vale enquanto o vídeo dá certo. Quando
+        # ele falha não há `.mp4` nenhum, e a decisão já foi tomada: sobra um diretório
+        # vazio, sem um byte que registre que a aula existe.
+        #
+        # MEDIDO em 14/08/2026 na NoeAI Automator: 8 das 53 aulas que falharam ficaram
+        # com `conteudo: []` — todas o módulo "07 - Command Library" inteiro. Do disco
+        # não dava para distinguir "aula sem texto" de "aula que o servidor perdeu".
+        #
+        # Agora o placeholder é gravado no ponto em que o resultado do vídeo JÁ é
+        # conhecido, que é o único lugar onde a decisão pode ser correta.
+        if not item_dashboard.get('tem_texto'):
+            try:
+                if salvar_aula_md(nome_limpo, pasta_destino, desc, resources,
+                                  permitir_vazio=True):
+                    item_dashboard['tem_texto'] = True
+            except Exception as erro:
+                print(f"⚠️  Não foi possível gravar o placeholder de '{nome_limpo}': "
+                      f"{type(erro).__name__}: {erro}")
+
         _marcar_erro(item_dashboard, nome_limpo, pasta_destino, motivo_falha)
         # Em caso de erro, limpamos a temp para não deixar lixo corrompido ocupando espaço
         limpar_pasta(caminho_pasta_temp)

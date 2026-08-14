@@ -264,6 +264,8 @@ Scripts na raiz do projeto, fora do servidor. **Os três simulam por padrão** �
 - **Sem cancelamento:** depois de enfileirado, um download só para matando o processo (`Ctrl+C`).
 - **Token do Skool expira (~24h):** a extensão resolve o token no enfileiramento. Fila muito longa pode alcançar a expiração — o servidor detecta e diz o que fazer (reenfileirar o curso; o que já baixou é pulado), mas não renova sozinho, porque ele não tem a sessão do Skool.
 - **Curso sem acesso não tem vídeo:** o Skool devolve a estrutura, mas remove os links no servidor. Esses cursos são pulados e listados no popup.
+- **O motor HLS exige faixa de áudio separada:** o `master.m3u8` precisa declarar vídeo e áudio como duas playlists. HLS com o áudio embutido na faixa de vídeo é variante legítima, mas cai como erro (`master.m3u8 sem faixa de áudio separada`). Não é "vídeo mudo" — é um formato que este motor ainda não monta.
+- **Aula que falha nunca fica sem registro:** se o vídeo falhar e a aula não tiver texto, o `.md` placeholder é gravado assim mesmo. Antes a pasta ficava vazia — medido em 14/08/2026, 8 aulas da NoeAI Automator com `conteudo: []`, indistinguíveis no disco de uma aula que o servidor tivesse perdido.
 
 ---
 

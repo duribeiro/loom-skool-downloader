@@ -41,7 +41,7 @@ def temp(tmp_path, monkeypatch):
 
 
 def test_download_completa(rede_falsa, temp):
-    assert downloader.processar_download(URL_MASTER, temp, "Aula", "Curso") is True
+    assert downloader.processar_download(URL_MASTER, temp, "Aula", "Curso") == (True, None)
 
 
 def test_escolhe_a_maior_qualidade(rede_falsa, temp):
@@ -90,7 +90,7 @@ def test_pula_quando_o_mp4_ja_existe(rede_falsa, temp, tmp_path):
     destino.mkdir(parents=True)
     (destino / "Aula.mp4").write_bytes(b"\x00" * 2_000_000)  # > 1 MB
 
-    assert downloader.processar_download(URL_MASTER, temp, "Aula", "Curso") is True
+    assert downloader.processar_download(URL_MASTER, temp, "Aula", "Curso") == (True, None)
     assert rede_falsa == [], "não deveria ter feito nenhuma requisição"
 
 
@@ -114,4 +114,6 @@ def test_master_sem_audio_falha(monkeypatch, temp):
     monkeypatch.setattr(downloader.requests, "get",
                         lambda *a, **k: RespostaFalsa(master_mudo))
 
-    assert downloader.processar_download(URL_MASTER, temp, "Aula", "Curso") is False
+    ok, motivo = downloader.processar_download(URL_MASTER, temp, "Aula", "Curso")
+    assert ok is False
+    assert "áudio" in motivo, f"o motivo tem que nomear a causa, veio: {motivo!r}"
